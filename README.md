@@ -103,12 +103,11 @@ $env:VAD_CLIP_WEIGHTS = "C:\path\to\open_clip_model.safetensors"   # CLIP, not u
 ## Layout
 
 ```
-src/vad/routing/
+src/routing/        package `routing`: routing logic (imports no server code)
   schemas.py       Pydantic v2 contracts + JSON Schema export
   task_config.py   class registry, thresholds, budgets, feature flag, config hash
   scoring.py       Stage A (quality, relevance) and Stage B (box features, difficulty)
   adapters.py      Detector / relevance / VLM protocols; precomputed + LM Studio adapters
-  embedder.py      optional open_clip relevance scorer + CUDA-event GPU timer
   slicing.py       SAHI-style tiling, original-coordinate mapping, IoS union merge
   matching.py      class-aware matching, directional disagreement, provenance-preserving fusion
   policy.py        pure deterministic route-v1
@@ -117,4 +116,10 @@ src/vad/routing/
   evaluation.py    split isolation, frozen-set lock, route/cost report
   export.py        COCO-style versioned export + loader
   cli.py           vad-route
+src/services/       package `services`: model-service clients and servers
+  service_contracts.py  svc-1.0 wire models (detector server <-> client)
+  remote_adapters.py    RemoteDetector (HTTP) + WeMM MCP relevance scorer
+  embedder.py           optional open_clip scorer (not used for now) + CUDA-event timer
+  grounding_dino/       Grounding DINO server; own pixi workspace (see its README.md)
+tests/routing/, tests/services/
 ```

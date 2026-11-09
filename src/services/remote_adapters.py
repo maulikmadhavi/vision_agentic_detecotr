@@ -1,6 +1,6 @@
 """HTTP clients for separately served models. Increment 1: :class:`RemoteDetector`.
 
-Implements the existing :class:`~vad.routing.adapters.Detector` protocol, so the
+Implements the existing :class:`~routing.adapters.Detector` protocol, so the
 pipeline, slicing and policy are unchanged. Any failure raises
 :class:`RemoteDetectorError`; the pipeline turns that into a per-image error record
 (primary) or a ``*_failed`` review reason (secondary / SAHI), never "no boxes".
@@ -21,8 +21,8 @@ import httpx
 from PIL import Image
 from pydantic import ValidationError
 
-from .adapters import DetectorResult, RawDetection
-from .schemas import TaskSpec, stable_id
+from routing.adapters import DetectorResult, RawDetection
+from routing.schemas import TaskSpec, stable_id
 from .service_contracts import DetectClass, DetectRequest, DetectResponse
 
 

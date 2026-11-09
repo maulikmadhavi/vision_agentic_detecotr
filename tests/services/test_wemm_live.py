@@ -10,7 +10,7 @@ import os
 import pytest
 from PIL import Image, ImageDraw
 
-from vad.routing.remote_adapters import WeMMMCPRelevanceScorer
+from services.remote_adapters import WeMMMCPRelevanceScorer
 
 pytestmark = pytest.mark.wemm
 

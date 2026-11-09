@@ -1,6 +1,14 @@
-"""Server tests with a fake model (no torch, no weights, no GPU)."""
+"""Server tests with a fake model (no torch, no weights, no GPU).
+
+Run in the service environment: pixi run -m src/services/grounding_dino/pixi.toml test
+(skipped in the root environment, which has no fastapi).
+"""
 
 from __future__ import annotations
+
+import pytest
+
+pytest.importorskip("fastapi")
 
 import base64
 import hashlib
@@ -9,9 +17,9 @@ import io
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from vad.routing.service_contracts import DetectClass, DetectRequest, DetectResponse
+from services.service_contracts import DetectClass, DetectRequest, DetectResponse
 
-import server
+from services.grounding_dino import server
 
 
 def _req(classes, image=None):

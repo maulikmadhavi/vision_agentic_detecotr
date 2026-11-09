@@ -7,9 +7,9 @@ import json
 import pytest
 import yaml
 
-from vad.routing import cli
-from vad.routing.adapters import RawDetection
-from vad.routing.pipeline import ManifestEntry, RouteStore, RoutingPipeline
+from routing import cli
+from routing.adapters import RawDetection
+from routing.pipeline import ManifestEntry, RouteStore, RoutingPipeline
 
 from .helpers import CLASS_A, CLASS_B, FakeVLM, ScriptedDetector, ScriptedRelevance, config, draw, make_fixture
 
@@ -136,8 +136,8 @@ def test_r3_4_missing_class_with_calibrator_is_not_low_relevance(tmp_path):
 
 
 def test_r3_5_human_complete_does_not_clear_open_findings(tmp_path):
-    from vad.routing.completeness import audit
-    from vad.routing.schemas import Budget, FinalCandidate, Quality, RouteDecision, StageA
+    from routing.completeness import audit
+    from routing.schemas import Budget, FinalCandidate, Quality, RouteDecision, StageA
 
     cfg = config()
     sa = StageA(per_class={}, relevance_status="unavailable", relevance_band="unknown",

@@ -1793,7 +1793,7 @@ packages:
 - pypi: ./
   name: vad
   version: 0.1.0
-  sha256: 3c24286832ba5b25d73215995b4824eabd2aed21ef2e47973ff9537f75027629
+  sha256: 05b64800c2c9792d0990e9824840d66e332a2531912a481c0214e2539ca8fe0e
   requires_dist:
   - pydantic>=2.7,<3
   - numpy>=1.26

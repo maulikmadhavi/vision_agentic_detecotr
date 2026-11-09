@@ -3,8 +3,8 @@
 import pytest
 from PIL import Image, ImageDraw
 
-from vad.routing.adapters import LMStudioVLM
-from vad.routing.schemas import VerificationRequest
+from routing.adapters import LMStudioVLM
+from routing.schemas import VerificationRequest
 
 pytestmark = pytest.mark.lmstudio
 

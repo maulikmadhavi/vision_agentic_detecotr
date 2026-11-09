@@ -52,12 +52,11 @@ For matched boxes, use an explicitly configured IoU threshold and class mapping.
 Suggested package, adapted to the repository. As built:
 
 ```text
-src/vad/routing/
+src/routing/
   schemas.py       Pydantic v2 records + JSON Schema export
   task_config.py   class registry, prompts, thresholds, budgets, policy knobs, versions
   scoring.py       Stage A and Stage B feature extraction
   adapters.py      detector / relevance / VLM protocols; precomputed + LM Studio adapters
-  embedder.py      optional open_clip relevance scorer + CUDA-event timer
   slicing.py       native SAHI-style tiling and original-coordinate conversion
   matching.py      class-aware matching, deduplication, provenance-preserving fusion
   policy.py        pure deterministic route function
@@ -66,8 +65,13 @@ src/vad/routing/
   evaluation.py    isolation, frozen lock, route/cost report, VLM agreement
   export.py        COCO-style versioned export + loader
   cli.py           vad-route
+src/services/
+  service_contracts.py  svc-1.0 detector wire models
+  remote_adapters.py    remote detector and relevance-scorer clients
+  embedder.py           optional open_clip scorer + CUDA-event timer
+  grounding_dino/       detector server (own environment)
 configs/routing/example.yaml
-tests/routing/
+tests/routing/, tests/services/
 ```
 
 Define Pydantic v2 models and export their JSON Schemas. Reject unknown class IDs, nonfinite scores, invalid boxes, missing model versions and unsupported coordinate systems. Store a `schema_version` and content/hash IDs on every persisted record. Use canonical `xyxy` **pixel coordinates in the original image**, with `0 <= x1 < x2 <= width` and the analogous y rule. Convert sliced boxes before matching; keep slice origin and model provenance. Keep model confidences as raw model outputs rather than calling them calibrated probabilities.

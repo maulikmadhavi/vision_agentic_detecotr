@@ -18,7 +18,7 @@ from .adapters import LMStudioVLM, PrecomputedDetector, PrecomputedRelevance
 from .evaluation import route_report
 from .export import export_legacy, export_routed
 from .pipeline import RouteStore, RoutingPipeline, StoreLockedError, job_lock, load_image, load_manifest
-from .remote_adapters import WEMM_TEXT_SCALE, RemoteDetector, WeMMMCPRelevanceScorer
+from services.remote_adapters import WEMM_TEXT_SCALE, RemoteDetector, WeMMMCPRelevanceScorer
 from .schemas import ErrorRecord, RouteRecord, export_json_schemas
 from .task_config import load_config
 
@@ -116,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
                  if args.secondary_predictions else None)
     relevance = PrecomputedRelevance(args.relevance_scores, args.relevance_version) if args.relevance_scores else None
     if args.clip_weights:
-        from .embedder import SCORE_SCALE, OpenClipRelevance
+        from services.embedder import SCORE_SCALE, OpenClipRelevance
         if cfg.relevance.raw_scale != SCORE_SCALE:
             parser.error(f"--clip-weights needs relevance.raw_scale: {SCORE_SCALE} (with bands chosen for that scale)")
         relevance = OpenClipRelevance(args.clip_weights, args.clip_arch)

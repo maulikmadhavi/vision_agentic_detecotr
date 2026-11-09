@@ -11,12 +11,12 @@ import httpx
 import pytest
 from PIL import Image
 
-from vad.routing.adapters import RawDetection
-from vad.routing.pipeline import ManifestEntry, RouteStore, RoutingPipeline
-from vad.routing.remote_adapters import RemoteDetector, RemoteDetectorError
-from vad.routing.schemas import ErrorRecord, RouteRecord
-from vad.routing.slicing import run_sliced
-from vad.routing.task_config import SlicingConfig
+from routing.adapters import RawDetection
+from routing.pipeline import ManifestEntry, RouteStore, RoutingPipeline
+from services.remote_adapters import RemoteDetector, RemoteDetectorError
+from routing.schemas import ErrorRecord, RouteRecord
+from routing.slicing import run_sliced
+from routing.task_config import SlicingConfig
 
 from ..routing.helpers import CLASS_A, CLASS_B, BlobDetector, config, draw, task
 
@@ -138,7 +138,7 @@ def test_sahi_tiles_are_offset_once_into_original_pixels(tmp_path):
         return ok(body, img, [{"class_id": d.class_id, "box_xyxy": list(d.box_xyxy), "score": 0.9} for d in found])
 
     path = draw(tmp_path / "big.png", (1200, 900), [(CLASS_A, (700, 500, 740, 540))])
-    from vad.routing.pipeline import load_image
+    from routing.pipeline import load_image
     image, ref = load_image(ManifestEntry(str(path), image_id="big"))
     calls = []
     res = run_sliced(detector(server(reply, calls)), image, ref, task().class_ids,
@@ -149,7 +149,7 @@ def test_sahi_tiles_are_offset_once_into_original_pixels(tmp_path):
 
 def test_model_revision_is_part_of_the_record_key(tmp_path):
     entry = ManifestEntry(str(draw(tmp_path / "a.png", (320, 240), [])), image_id="a")
-    from vad.routing.pipeline import load_image
+    from routing.pipeline import load_image
     _, ref = load_image(entry)
     keys = {RoutingPipeline(config(), detector(None, model_revision=r), RouteStore(":memory:")).record_key(ref)
             for r in ("rev-1", "rev-2")}
@@ -172,7 +172,7 @@ def _cli_args(fx, out, *extra):
 
 
 def test_cli_shadow_with_primary_url_uses_remote_detector(tmp_path, monkeypatch):
-    from vad.routing import cli
+    from routing import cli
     from ..routing.helpers import make_fixture
 
     blob = BlobDetector()
@@ -206,7 +206,7 @@ def test_cli_shadow_with_primary_url_uses_remote_detector(tmp_path, monkeypatch)
     (["--primary-predictions", "p.jsonl", "--primary-version", "v@1", "--primary-url", "http://d"], "not allowed with"),
 ], ids=["version-with-url", "missing-revision", "missing-version", "remote-flag-without-url", "both-sources"])
 def test_cli_primary_source_flags_are_validated(tmp_path, capsys, extra, message):
-    from vad.routing import cli
+    from routing import cli
     from ..routing.helpers import make_fixture
 
     fx = make_fixture(tmp_path / "fx")

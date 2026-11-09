@@ -19,8 +19,8 @@ from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw
 
 import server
-from vad.routing.matching import iou
-from vad.routing.service_contracts import DetectClass, DetectRequest, DetectResponse
+from routing.matching import iou
+from services.service_contracts import DetectClass, DetectRequest, DetectResponse
 
 SQUARE = (100, 80, 200, 160)
 CLASSES = (DetectClass(class_id="blue_square", prompts=("a blue square",)),

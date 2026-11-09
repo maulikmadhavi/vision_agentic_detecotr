@@ -21,6 +21,6 @@ jobs:
           environments: default
           locked: true
       - name: Import smoke check
-        run: pixi run --locked python -c "import vad.routing.cli, vad.routing.pipeline"
+        run: pixi run --locked python -c "import routing.cli, routing.pipeline, services.remote_adapters"
       - name: Default test suite
         run: pixi run --locked test

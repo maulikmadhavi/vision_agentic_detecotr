@@ -10,9 +10,9 @@ import httpx
 import pytest
 from PIL import Image
 
-from vad.routing.pipeline import ManifestEntry, RouteStore, RoutingPipeline
-from vad.routing.remote_adapters import RemoteScorerError, WeMMMCPRelevanceScorer
-from vad.routing.schemas import RouteRecord
+from routing.pipeline import ManifestEntry, RouteStore, RoutingPipeline
+from services.remote_adapters import RemoteScorerError, WeMMMCPRelevanceScorer
+from routing.schemas import RouteRecord
 
 from ..routing.helpers import CLASS_A, CLASS_B, ScriptedDetector, config, draw
 
@@ -174,7 +174,7 @@ def _args(fx, out):
 
 
 def test_cli_wemm_requires_the_env_var(tmp_path, monkeypatch, capsys):
-    from vad.routing import cli
+    from routing import cli
     monkeypatch.delenv("VAD_WEMM_URL", raising=False)
     with pytest.raises(SystemExit):
         cli.main(_args(_fx(tmp_path), tmp_path / "out"))
@@ -182,7 +182,7 @@ def test_cli_wemm_requires_the_env_var(tmp_path, monkeypatch, capsys):
 
 
 def test_cli_wemm_requires_matching_raw_scale(tmp_path, monkeypatch, capsys):
-    from vad.routing import cli
+    from routing import cli
     monkeypatch.setenv("VAD_WEMM_URL", URL)
     with pytest.raises(SystemExit):
         cli.main(_args(_fx(tmp_path, raw_scale="unspecified"), tmp_path / "out"))
@@ -190,7 +190,7 @@ def test_cli_wemm_requires_matching_raw_scale(tmp_path, monkeypatch, capsys):
 
 
 def test_cli_wemm_scores_stage_a(tmp_path, monkeypatch):
-    from vad.routing import cli
+    from routing import cli
     calls = []
     monkeypatch.setenv("VAD_WEMM_URL", URL)
     monkeypatch.setattr(cli, "WeMMMCPRelevanceScorer", lambda **kw: WeMMMCPRelevanceScorer(
@@ -206,9 +206,9 @@ def test_cli_wemm_scores_stage_a(tmp_path, monkeypatch):
 def test_rename_keeps_run_keys_and_old_name_alias():
     # Golden key computed with the class under its previous name (RemoteRelevanceScorer):
     # the rename must not change model_version, RunInfo or the record key.
-    from vad.routing import remote_adapters
-    from vad.routing.remote_adapters import WeMMMCPRelevanceScorer
-    from vad.routing.schemas import ImageRef
+    from services import remote_adapters
+    from services.remote_adapters import WeMMMCPRelevanceScorer
+    from routing.schemas import ImageRef
 
     ref = ImageRef(id="a", uri="a.png", width=320, height=240, sha256="0" * 64)
     pipe = RoutingPipeline(config(relevance=WEMM_CFG), ScriptedDetector({}), RouteStore(":memory:"),
@@ -221,7 +221,7 @@ def test_rename_keeps_run_keys_and_old_name_alias():
 
 
 def test_route_report_counts_relevance_scorer_failures(tmp_path):
-    from vad.routing.evaluation import route_report
+    from routing.evaluation import route_report
 
     class Broken:
         model_version = "broken@1"
@@ -238,7 +238,7 @@ def test_route_report_counts_relevance_scorer_failures(tmp_path):
 
 
 def test_cli_warns_on_stderr_when_the_scorer_failed(tmp_path, monkeypatch, capsys):
-    from vad.routing import cli
+    from routing import cli
     monkeypatch.setenv("VAD_WEMM_URL", URL)
     monkeypatch.setattr(cli, "WeMMMCPRelevanceScorer", lambda **kw: WeMMMCPRelevanceScorer(
         transport=server(FAILURES["isError"], []), **kw))

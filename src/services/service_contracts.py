@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from .schemas import Strict
+from routing.schemas import Strict
 
 SERVICE_SCHEMA_VERSION = "svc-1.0"
 

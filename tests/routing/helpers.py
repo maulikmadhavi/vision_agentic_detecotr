@@ -9,9 +9,9 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw
 
-from vad.routing.adapters import DetectorResult, RawDetection, uncertain
-from vad.routing.schemas import ClassSpec, TaskSpec, VerificationResult
-from vad.routing.task_config import RoutingConfig
+from routing.adapters import DetectorResult, RawDetection, uncertain
+from routing.schemas import ClassSpec, TaskSpec, VerificationResult
+from routing.task_config import RoutingConfig
 
 # Deliberately non-COCO class ids.
 CLASS_A = "blue_widget_x9"

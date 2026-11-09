@@ -1,6 +1,6 @@
 """Live check against the local Grounding DINO server (excluded by default).
 
-Start the server first:  pixi run -m third_party_service/grounding_dino/pixi.toml serve
+Start the server first:  pixi run -m src/services/grounding_dino/pixi.toml serve
 Then run:                pixi run test-gdino
 """
 
@@ -11,9 +11,9 @@ import os
 import pytest
 from PIL import Image, ImageDraw
 
-from vad.routing.matching import iou
-from vad.routing.remote_adapters import RemoteDetector
-from vad.routing.schemas import ClassSpec, TaskSpec
+from routing.matching import iou
+from services.remote_adapters import RemoteDetector
+from routing.schemas import ClassSpec, TaskSpec
 
 pytestmark = pytest.mark.gdino
 

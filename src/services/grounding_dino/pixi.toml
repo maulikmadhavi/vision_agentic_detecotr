@@ -1,6 +1,6 @@
 # Grounding DINO detector server (svc-1.0). Its own pixi workspace: the root
 # pyproject.toml / pixi.lock are not affected. Run from the repo root with
-#   pixi run -m third_party_service/grounding_dino/pixi.toml <task>
+#   pixi run -m src/services/grounding_dino/pixi.toml <task>
 
 [workspace]
 name = "vad-grounding-dino-service"
@@ -11,7 +11,7 @@ platforms = ["win-64", "linux-64"]
 python = "3.13.*"
 
 [pypi-dependencies]
-vad = { path = "../..", editable = true }   # shared svc-1.0 contract models
+vad = { path = "../../..", editable = true }   # repo root: installs the routing + services packages
 torch = { version = ">=2.11,<3", index = "https://download.pytorch.org/whl/cu128" }
 transformers = ">=4.45"
 fastapi = ">=0.115"
@@ -19,7 +19,7 @@ uvicorn = ">=0.30"
 pytest = ">=8"
 
 [tasks]
-test = "pytest -q"
+test = "pytest -q ../../../tests/services/grounding_dino"
 fetch = "python server.py --fetch"
 serve = "python server.py"
 smoke = "python smoke.py"

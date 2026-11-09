@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from vad.routing import cli
-from vad.routing.adapters import RawDetection
-from vad.routing.evaluation import HumanLabel, verification_items, vlm_agreement
-from vad.routing.pipeline import ManifestEntry, RouteStore, RoutingPipeline, StoreLockedError, job_lock
-from vad.routing.policy import Capabilities, route
-from vad.routing.schemas import BoxFeatures, ClassRelevance, Difficulty, Quality, StageA, VerificationResult
+from routing import cli
+from routing.adapters import RawDetection
+from routing.evaluation import HumanLabel, verification_items, vlm_agreement
+from routing.pipeline import ManifestEntry, RouteStore, RoutingPipeline, StoreLockedError, job_lock
+from routing.policy import Capabilities, route
+from routing.schemas import BoxFeatures, ClassRelevance, Difficulty, Quality, StageA, VerificationResult
 
 from .helpers import CLASS_A, CLASS_B, FakeVLM, ScriptedDetector, ScriptedRelevance, config, draw, make_fixture
 
@@ -190,7 +190,7 @@ def test_core_package_imports_without_torch():
     import subprocess
     import sys
     code = ("import sys; sys.modules['torch'] = None; sys.modules['open_clip'] = None; "
-            "import vad.routing.cli, vad.routing.pipeline, vad.routing.embedder")
+            "import routing.cli, routing.pipeline, services.embedder")
     assert subprocess.run([sys.executable, "-c", code]).returncode == 0
 
 

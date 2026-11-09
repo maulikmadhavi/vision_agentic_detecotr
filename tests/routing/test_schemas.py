@@ -7,10 +7,10 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from vad.routing.schemas import (
+from routing.schemas import (
     EXPORTED_MODELS, ClassSpec, Detection, Difficulty, ImageRef, RunInfo, TaskSpec, export_json_schemas,
 )
-from vad.routing.task_config import load_config
+from routing.task_config import load_config
 
 from .helpers import CLASS_A, config
 

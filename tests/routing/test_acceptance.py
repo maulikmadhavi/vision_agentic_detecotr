@@ -11,15 +11,15 @@ from pathlib import Path
 import httpx
 import pytest
 
-from vad.routing import cli
-from vad.routing.adapters import LMStudioVLM, RawDetection
-from vad.routing.evaluation import IsolationError, assert_not_frozen, check_isolation, load_frozen, lock_frozen_set
-from vad.routing.export import load_annotations
-from vad.routing.matching import iou
-from vad.routing.pipeline import ManifestEntry, RouteStore, RoutingPipeline
-from vad.routing.schemas import VerificationRequest
-from vad.routing.slicing import run_sliced, tile_grid
-from vad.routing.task_config import SlicingConfig
+from routing import cli
+from routing.adapters import LMStudioVLM, RawDetection
+from routing.evaluation import IsolationError, assert_not_frozen, check_isolation, load_frozen, lock_frozen_set
+from routing.export import load_annotations
+from routing.matching import iou
+from routing.pipeline import ManifestEntry, RouteStore, RoutingPipeline
+from routing.schemas import VerificationRequest
+from routing.slicing import run_sliced, tile_grid
+from routing.task_config import SlicingConfig
 
 from .helpers import CLASS_A, CLASS_B, BlobDetector, FakeVLM, ScriptedDetector, ScriptedRelevance, config, draw, make_fixture, task
 
@@ -51,7 +51,7 @@ def test_arbitrary_class_flows_end_to_end(tmp_path):
     accepted = [c for c in rec.final_candidates if c.status == "accepted"]
     assert [c.class_id for c in accepted] == [CLASS_B]
 
-    from vad.routing.export import export_routed
+    from routing.export import export_routed
     doc = export_routed([rec], cfg.task, tmp_path / "ann.json")
     assert [c["name"] for c in doc["categories"]] == [CLASS_A, CLASS_B]
     assert doc["annotations"][0]["category_id"] == 2
@@ -145,9 +145,9 @@ import json, sys
 sys.path.insert(0, sys.argv[2])
 from pathlib import Path
 from tests.routing.helpers import make_fixture, config, BlobDetector, ScriptedRelevance
-from vad.routing.adapters import PrecomputedDetector, PrecomputedRelevance
-from vad.routing.pipeline import RouteStore, RoutingPipeline, load_manifest
-from vad.routing.policy import stable_sample
+from routing.adapters import PrecomputedDetector, PrecomputedRelevance
+from routing.pipeline import RouteStore, RoutingPipeline, load_manifest
+from routing.policy import stable_sample
 fx = make_fixture(Path(sys.argv[1]) / "fx")
 cfg = config(audit={"low_relevance_sample_rate": 0.5, "zero_box_sample_rate": 0.5})
 pipe = RoutingPipeline(cfg, PrecomputedDetector(fx["preds"], "prim@1"), RouteStore(Path(sys.argv[1]) / "r.sqlite"),
@@ -234,7 +234,7 @@ def test_no_secondary_marks_disagreement_unavailable(tmp_path):
 
 def test_sahi_tile_edge_and_overlap_map_once_and_dedupe(tmp_path):
     from PIL import Image
-    from vad.routing.pipeline import load_image
+    from routing.pipeline import load_image
     cfg = SlicingConfig(tile=400, overlap=0.25, include_full_image=False, merge_ios=0.5)
     truth = [
         (CLASS_A, (310, 120, 380, 180)),   # wholly inside the 300..400 x-overlap: seen by two tiles
@@ -259,7 +259,7 @@ def test_sahi_tile_edge_and_overlap_map_once_and_dedupe(tmp_path):
 
 
 def test_sahi_cut_object_is_reassembled_by_full_image_pass(tmp_path):
-    from vad.routing.pipeline import load_image
+    from routing.pipeline import load_image
     cfg = SlicingConfig(tile=400, overlap=0.1, include_full_image=True)
     truth = [(CLASS_A, (250, 100, 550, 200))]  # wider than the overlap: cut by every tile
     entry = ManifestEntry(str(draw(tmp_path / "wide.png", (1000, 400), truth)), image_id="wide")
@@ -406,8 +406,8 @@ def test_audited_zero_box_low_relevance_image_needs_review(tmp_path):
 
 
 def test_complete_requires_human_or_calibrated_policy():
-    from vad.routing.completeness import audit
-    from vad.routing.schemas import AnnotationAudit, Budget, Quality, RouteDecision, StageA
+    from routing.completeness import audit
+    from routing.schemas import AnnotationAudit, Budget, Quality, RouteDecision, StageA
     from pydantic import ValidationError
     cfg = config()
     sa = StageA(per_class={}, relevance_status="unavailable", relevance_band="unknown",
@@ -574,7 +574,7 @@ def test_feature_flag_off_keeps_legacy_output(tmp_path):
            for a in doc["annotations"]]
     assert got == expected
 
-    from vad.routing.task_config import load_config
+    from routing.task_config import load_config
     cfg = load_config(fx["config"])
     assert cfg.routing_enabled is False
     with pytest.raises(RuntimeError):
@@ -733,9 +733,9 @@ def test_r4_sahi_gpu_budget_enforced_per_tile(tmp_path):
 
 
 def test_r4_sahi_slice_cap_enforced_during_tiling():
-    from vad.routing.pipeline import load_image  # noqa: F401  (import check only)
+    from routing.pipeline import load_image  # noqa: F401  (import check only)
     from PIL import Image
-    from vad.routing.schemas import ImageRef
+    from routing.schemas import ImageRef
     img = Image.new("RGB", (640, 320), (200, 200, 200))
     ref = ImageRef(id="x", uri="x", width=640, height=320, sha256="0" * 64)
     det = BlobDetector()
@@ -791,7 +791,7 @@ def test_r2_explicit_empty_row_is_a_valid_zero_box_result(tmp_path):
     ([{"image_id": "a", "detections": []}, {"image_id": "a", "detections": []}], "duplicate image_id"),
 ])
 def test_r2_precomputed_rows_must_be_explicit_and_unique(tmp_path, rows, match):
-    from vad.routing.adapters import PrecomputedDetector
+    from routing.adapters import PrecomputedDetector
     p = tmp_path / "p.jsonl"
     p.write_text("".join(json.dumps(r) + "\n" for r in rows))
     with pytest.raises(ValueError, match=match):
@@ -799,7 +799,7 @@ def test_r2_precomputed_rows_must_be_explicit_and_unique(tmp_path, rows, match):
 
 
 def test_r2_changed_precomputed_file_with_same_version_does_not_reuse_records(tmp_path):
-    from vad.routing.adapters import PrecomputedDetector
+    from routing.adapters import PrecomputedDetector
     entry = _img(tmp_path)
     preds = tmp_path / "preds.jsonl"
     store_path = tmp_path / "routes.sqlite"

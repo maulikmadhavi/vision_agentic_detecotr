@@ -28,8 +28,8 @@ def _weights() -> Path:
 
 def test_open_clip_scorer_separates_present_from_absent(tmp_path):
     pytest.importorskip("open_clip")
-    from vad.routing.embedder import SCORE_SCALE, OpenClipRelevance
-    from vad.routing.pipeline import ManifestEntry, RouteStore, RoutingPipeline
+    from services.embedder import SCORE_SCALE, OpenClipRelevance
+    from routing.pipeline import ManifestEntry, RouteStore, RoutingPipeline
 
     from .helpers import ScriptedDetector, config
 

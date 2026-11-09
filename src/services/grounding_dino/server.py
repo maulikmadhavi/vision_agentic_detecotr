@@ -1,12 +1,12 @@
-"""Grounding DINO detector server speaking svc-1.0 (see src/vad/routing/service_contracts.py).
+"""Grounding DINO detector server speaking svc-1.0 (see src/services/service_contracts.py).
 
 One forward pass per requested class, prompted only with that class's prompts, so
 every returned box belongs to that class. This avoids mapping Grounding DINO's
 text spans back to classes, which can merge, overlap or match nothing and would
 silently lose or misassign boxes. Cost: N passes for N classes.
 
-    pixi run -m third_party_service/grounding_dino/pixi.toml fetch   # one-time, pinned download
-    pixi run -m third_party_service/grounding_dino/pixi.toml serve   # http://127.0.0.1:8001
+    pixi run -m src/services/grounding_dino/pixi.toml fetch   # one-time, pinned download
+    pixi run -m src/services/grounding_dino/pixi.toml serve   # http://127.0.0.1:8001
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from collections.abc import Callable, Sequence
 from fastapi import FastAPI
 from PIL import Image
 
-from vad.routing.service_contracts import DetectClass, DetectRequest, DetectResponse, ServedBox
+from services.service_contracts import DetectClass, DetectRequest, DetectResponse, ServedBox
 
 MODEL_ID = "grounding-dino-tiny"
 HF_REPO = "IDEA-Research/grounding-dino-tiny"
@@ -90,7 +90,7 @@ def load_hf(device: str | None = None) -> tuple[Predict, str]:
     from huggingface_hub import hf_hub_download
     from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
 
-    from vad.routing.embedder import cuda_timer, file_sha256
+    from services.embedder import cuda_timer, file_sha256
 
     weights = hf_hub_download(HF_REPO, "model.safetensors", revision=HF_REVISION, local_files_only=True)
     digest = file_sha256(weights)
