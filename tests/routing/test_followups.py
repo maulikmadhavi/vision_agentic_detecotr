@@ -1,4 +1,4 @@
-"""Tests for the 2026-11-09 reviewer follow-ups (docs/project_board.md, Part D)."""
+"""Tests for the 2026-11-09 reviewer follow-ups (docs/project_board.md)."""
 
 from __future__ import annotations
 

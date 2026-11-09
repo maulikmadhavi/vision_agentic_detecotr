@@ -2,7 +2,7 @@
 
 Adaptive image-level routing for custom object detection. Phases 0–4 are implemented and **disabled by default** (`routing_enabled: false`); Phase 5 is started.
 
-- Project board (status, backlog, decisions, spec, integration map, implementation log): [docs/project_board.md](docs/project_board.md)
+- Project board (done, to do, missing, decisions, how it works): [docs/project_board.md](docs/project_board.md)
 - Review notes: [docs/reviewer_suggestion.md](docs/reviewer_suggestion.md)
 
 ## Setup
@@ -39,7 +39,7 @@ vad-route legacy --config ... --images ... --primary-predictions ... --primary-v
 
 Shadow output: `routes.sqlite` (resumable step cache, records, error queue), `route_trace.jsonl`, `annotations.json`, `report.json`. A shadow run holds an exclusive lock on its `--out` directory; a second concurrent run on the same directory exits with code 2.
 
-**Live relevance (CLIP).** `--clip-weights` scores Stage A with a local open_clip checkpoint (`pixi install -e clip`, then `pixi run -e clip vad-route shadow ...`). Its score is a prompt-contrast softmax in [0, 1] (`clip_prompt_softmax_v1`), not a cosine, so the config must set `relevance.raw_scale: clip_prompt_softmax_v1` and choose bands for that scale; otherwise the run is refused. See [docs/project_board.md](docs/project_board.md), Part D (CLIP scorer).
+**Live relevance (CLIP).** `--clip-weights` scores Stage A with a local open_clip checkpoint (`pixi install -e clip`, then `pixi run -e clip vad-route shadow ...`). Its score is a prompt-contrast softmax in [0, 1] (`clip_prompt_softmax_v1`), not a cosine, so the config must set `relevance.raw_scale: clip_prompt_softmax_v1` and choose bands for that scale; otherwise the run is refused. See [docs/project_board.md](docs/project_board.md), "How it works and why".
 
 `--vlm` uses LM Studio at `http://localhost:1234/v1` with `qwen3-vl-4b-instruct`. Change the model with `vlm.model` in the config.
 
