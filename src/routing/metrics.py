@@ -233,7 +233,10 @@ class ImageResult:
 
 
 def image_results(records: Sequence) -> dict[str, ImageResult]:
-    """Reduce RouteRecords to :class:`ImageResult` by image id."""
+    """Reduce RouteRecords to :class:`ImageResult` by image id; a repeated image id is refused, not resolved."""
+    if repeated := sorted(i for i, n in Counter(r.image.id for r in records).items() if n > 1):
+        raise LabelError(f"repeated image ids in the trace {repeated[:10]}; evaluation needs one result per image "
+                         "per run (rebuild a concatenated or retried trace)")
     return {r.image.id: ImageResult(
         detections=tuple(Prediction(d.class_id, d.box_xyxy, d.raw_confidence) for d in r.primary_candidates),
         accepted=tuple(Prediction(c.class_id, c.box_xyxy, None) for c in r.final_candidates if c.status == "accepted"),

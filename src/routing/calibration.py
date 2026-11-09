@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,7 +39,7 @@ from .evaluation import IsolationError, assert_split_allows, check_image_content
 from .metrics import load_ground_truth
 from .sample import label_digest
 from .schemas import RelevanceCalibratorArtifact, RouteRecord, TaskSpec, canonical_json
-from .task_config import RoutingConfig
+from .task_config import RoutingConfig, shadow_run_config
 
 MIN_EACH = 10
 RIDGE = 1.0  # L2 penalty on the standardized slope; the intercept is not penalized
@@ -94,8 +95,17 @@ def _fit_counted(name: str, data: list[tuple[float, bool]], min_each: int) -> di
     return {**fit_logistic([x for x, _ in data], [y for _, y in data]), "n_pos": n_pos, "n_neg": n_neg}
 
 
+def _refuse_repeats(image_ids: Sequence[str]) -> None:
+    """One observation per image: repeated rows would reweight the fit and count towards MIN_EACH."""
+    if repeated := sorted(i for i, n in Counter(image_ids).items() if n > 1):
+        raise CalibrationError(f"repeated image ids {repeated[:10]}; the fit needs one observation per image "
+                               "(rebuild a concatenated or retried trace)")
+
+
 def fit_relevance_rows(rows: Sequence[FitRow], class_ids: Sequence[str], min_each: int = MIN_EACH) -> dict:
-    """Fit any-target first, then each class; refuses below ``min_each`` positives or negatives."""
+    """Fit any-target first, then each class; refuses repeated images and fewer than ``min_each``
+    positives or negatives (so the minimum counts distinct images)."""
+    _refuse_repeats([r.image_id for r in rows])
     rows = sorted(rows, key=lambda r: r.image_id)
     any_data = []
     for r in rows:
@@ -183,6 +193,11 @@ def fit_relevance(records: Sequence[RouteRecord], label_doc: Mapping, split_mani
         raise CalibrationError(f"the trace must come from exactly one relevance scorer; found {scorers}")
     if any(r.task != task for r in records):
         raise CalibrationError("the trace was routed with a different task (classes or prompts) than --config")
+    _refuse_repeats([r.image.id for r in records])
+    if shadow_run_config(cfg, {r.run.config_hash for r in records}) is None:
+        raise CalibrationError(f"--config does not match the run that made the trace (run config hashes "
+                               f"{sorted({r.run.config_hash for r in records})}); the fit records the scale, scorer "
+                               "and prompts of that run, so it needs the config the shadow run used")
     if split_manifest.get("version") != "split-v2":
         raise CalibrationError("fitting needs a split-v2 manifest (with each image's sha256 and size) from "
                                "`vad-route sample split`")

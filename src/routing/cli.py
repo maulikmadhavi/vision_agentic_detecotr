@@ -34,7 +34,7 @@ from .sample import (
 )
 from .store import RouteStore, StoreLockedError, job_lock
 from .schemas import ErrorRecord, RouteRecord, TaskSpec, export_json_schemas
-from .task_config import RoutingConfig, load_config
+from .task_config import RoutingConfig, load_config, shadow_run_config
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -193,6 +193,10 @@ def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
                        "whatever its split"}
     lines = Path(args.trace).read_text(encoding="utf-8").splitlines()
     records = [RouteRecord.model_validate_json(line) for line in lines if line.strip()]
+    try:
+        results = image_results(records)  # refuses repeated images before anything is scored or written
+    except LabelError as e:
+        parser.error(f"--trace: {e}")
     if args.split_manifest:
         manifest = json.loads(Path(args.split_manifest).read_text(encoding="utf-8"))
         lock = json.loads(Path(args.frozen_lock).read_text(encoding="utf-8"))
@@ -219,7 +223,7 @@ def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
             split = {"status": "verified frozen_eval", **split,
                      "image_content": "bound: each frozen result matches the lock's sha256 and size"}
     metrics = {"evidence_status": evidence_status(label_doc), "split": split,
-               **evaluate(ground_truth, task.class_ids, image_results(records), args.iou),
+               **evaluate(ground_truth, task.class_ids, results, args.iou),
                "cost": route_report(records)}
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -273,12 +277,9 @@ def _read_trace(path: str) -> list[RouteRecord]:
 
 def _run_config(parser: argparse.ArgumentParser, cfg: RoutingConfig, records: list[RouteRecord]) -> RoutingConfig:
     """The config a shadow run actually hashed: shadow enables routing, and --vlm enables the VLM."""
-    routed = cfg.model_copy(update={"routing_enabled": True})
-    variants = [cfg, routed, routed.model_copy(update={"vlm": cfg.vlm.model_copy(update={"enabled": True})})]
     hashes = {r.run.config_hash for r in records}
-    for variant in variants:
-        if not hashes or hashes == {variant.config_hash()}:
-            return variant
+    if (variant := shadow_run_config(cfg, hashes)) is not None:
+        return variant
     parser.error(f"--config does not match the run (run config hashes {sorted(hashes)}); "
                  "the re-audit needs the config the shadow run used")
 

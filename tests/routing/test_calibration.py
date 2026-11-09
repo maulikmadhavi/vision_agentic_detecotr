@@ -135,7 +135,7 @@ def test_any_target_stays_within_the_coherent_range():
 SCALE_CFG = config(relevance={"raw_scale": "test_scale_v1", "raw_high": 0.6, "raw_low": 0.2})
 
 
-def _records(tmp_path, n=30, scorer="rel@1"):
+def _records(tmp_path, n=30, scorer="rel@1", cfg=SCALE_CFG):
     rng, records, label_images, label_anns, manifest = random.Random(5), [], [], [], {}
     for k in range(n):
         name = f"img{k}"
@@ -143,7 +143,7 @@ def _records(tmp_path, n=30, scorer="rel@1"):
         scores = {CLASS_A: (0.5 if has_a else 0.2) + rng.uniform(-0.15, 0.15),
                   CLASS_B: (0.5 if has_b else 0.2) + rng.uniform(-0.15, 0.15)}
         entry = ManifestEntry(str(draw(tmp_path / f"{name}.png", (64, 48), [])), image_id=name)
-        records.append(RoutingPipeline(SCALE_CFG, ScriptedDetector({}), RouteStore(":memory:"),
+        records.append(RoutingPipeline(cfg, ScriptedDetector({}), RouteStore(":memory:"),
                                        relevance=ScriptedRelevance({name: scores}, scorer)).process(entry))
         label_images.append({"id": k + 1, "vad_image_id": name, "width": 64, "height": 48, "vad_exhaustive": True})
         for cat, present in ((1, has_a), (2, has_b)):
@@ -209,6 +209,65 @@ def test_fitting_refuses_frozen_image_bytes_under_another_id(tmp_path):
                                       "width": reentered.width, "height": reentered.height}
     with pytest.raises(IsolationError, match="img0.*frozen-x"):
         fit_relevance(records, labels, manifest, SCALE_CFG)
+
+
+# --- R5-5: one observation per image; R5-6: the fit's config is the run's ------------------------
+
+
+def test_repeating_two_images_cannot_reach_the_minimum():
+    """The reviewer's case: one positive and one negative image, ten rows each, made a 10/10 fit."""
+    pos = FitRow("pos", {CLASS_A: 0.5, CLASS_B: 0.5}, {CLASS_A: True, CLASS_B: True})
+    neg = FitRow("neg", {CLASS_A: 0.1, CLASS_B: 0.1}, {CLASS_A: False, CLASS_B: False})
+    with pytest.raises(CalibrationError, match=r"repeated image ids.*\['neg', 'pos'\]"):
+        fit_relevance_rows([pos] * 10 + [neg] * 10, CLASSES)
+
+
+@pytest.mark.parametrize("how", ["identical", "conflicting", "shuffled"])
+def test_a_trace_with_a_repeated_image_is_refused_before_fitting(tmp_path, how):
+    records, labels, manifest = _records(tmp_path)
+    repeat = records[3]
+    if how == "conflicting":  # same image, other scores (e.g. a retried run)
+        sa = repeat.stage_a.model_copy(update={"per_class": {
+            c: v.model_copy(update={"raw_similarity": 0.99}) for c, v in repeat.stage_a.per_class.items()}})
+        repeat = repeat.model_copy(update={"stage_a": sa})
+    trace = records + [repeat]
+    if how == "shuffled":
+        random.Random(1).shuffle(trace)
+    with pytest.raises(CalibrationError, match=r"repeated image ids.*\['img3'\]"):
+        fit_relevance(trace, labels, manifest, SCALE_CFG)
+
+
+def test_a_repeated_unlabelled_image_is_refused_too_not_listed_twice(tmp_path):
+    records, labels, manifest = _records(tmp_path, n=31)
+    labels["images"] = [i for i in labels["images"] if i["vad_image_id"] != "img30"]
+    labels["annotations"] = [a for a in labels["annotations"] if a["image_id"] != 31]
+    with pytest.raises(CalibrationError, match=r"repeated image ids.*\['img30'\]"):
+        fit_relevance(records + [records[30]], labels, manifest, SCALE_CFG)
+
+
+def test_fitting_refuses_a_config_whose_scale_differs_from_the_run(tmp_path):
+    records, labels, manifest = _records(tmp_path)
+    other = config(relevance={"raw_scale": "unrelated_scale_v2", "raw_high": 0.6, "raw_low": 0.2})
+    with pytest.raises(CalibrationError, match="does not match the run"):
+        fit_relevance(records, labels, manifest, other)
+
+
+def test_fitting_refuses_a_trace_mixing_runs_of_different_configs(tmp_path):
+    records, labels, manifest = _records(tmp_path)
+    mixed = records[:-1] + [records[-1].model_copy(update={"run": records[-1].run.model_copy(
+        update={"config_hash": "f" * 16})})]
+    with pytest.raises(CalibrationError, match="does not match the run"):
+        fit_relevance(mixed, labels, manifest, SCALE_CFG)
+
+
+@pytest.mark.parametrize("vlm_flag", [False, True], ids=["shadow", "shadow --vlm"])
+def test_fitting_accepts_the_config_file_the_shadow_run_overrode(tmp_path, vlm_flag):
+    """shadow forces routing on and --vlm turns the VLM on; the config file itself does not say so."""
+    run_cfg = SCALE_CFG.model_copy(update={"vlm": SCALE_CFG.vlm.model_copy(update={"enabled": vlm_flag})})
+    records, labels, manifest = _records(tmp_path, cfg=run_cfg)
+    file_cfg = SCALE_CFG.model_copy(update={"routing_enabled": False})
+    expected = fit_relevance(*_records(tmp_path / "plain"), SCALE_CFG)
+    assert fit_relevance(records, labels, manifest, file_cfg)["classes"] == expected["classes"]
 
 
 def test_fitting_needs_a_declared_scale_and_one_scorer(tmp_path):

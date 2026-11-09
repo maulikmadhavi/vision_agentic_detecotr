@@ -178,6 +178,36 @@ def test_an_old_lock_without_image_hashes_is_reported_unverified(tmp_path):
     assert "version" not in json.loads(paths["lock"].read_text(encoding="utf-8"))  # never upgraded
 
 
+# --- R5-5: one result per image in an evaluated trace ---------------------------------------------
+
+
+def _record(tmp_path, name, detector=None):
+    path = tmp_path / f"{name}.png"
+    Image.new("RGB", (100, 100), (255, 255, 255)).save(path)
+    return RoutingPipeline(config(), detector or ScriptedDetector({}), RouteStore(":memory:")).process(
+        ManifestEntry(str(path), image_id=name))
+
+
+@pytest.mark.parametrize("how", ["identical", "conflicting"])
+def test_image_results_refuse_a_repeated_image_instead_of_keeping_the_last(tmp_path, how):
+    from routing.interfaces import RawDetection
+    from routing.metrics import LabelError, image_results
+    first = _record(tmp_path, "p0-0")
+    again = first if how == "identical" else _record(
+        tmp_path, "p0-0", ScriptedDetector({"p0-0": [RawDetection("blue_widget_x9", (10, 10, 30, 30), 0.9)]}))
+    with pytest.raises(LabelError, match=r"repeated image ids.*\['p0-0'\]"):
+        image_results([first, _record(tmp_path, "p1-0"), again])
+
+
+def test_evaluate_refuses_a_trace_with_a_repeated_image_before_writing(tmp_path, capsys):
+    paths, *_ = _split_files(tmp_path)
+    record = _record(tmp_path, "p0-0")
+    paths["trace"].write_text((record.model_dump_json() + "\n") * 2, encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        _evaluate(paths, tmp_path / "m.json")
+    assert exc.value.code == 2 and "p0-0" in capsys.readouterr().err and not (tmp_path / "m.json").exists()
+
+
 @pytest.mark.parametrize("flag", ["--split-manifest", "--frozen-lock"])
 def test_evaluate_needs_both_split_flags_or_neither(tmp_path, capsys, flag):
     paths, *_ = _split_files(tmp_path)

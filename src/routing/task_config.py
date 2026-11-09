@@ -151,6 +151,20 @@ class RoutingConfig(Strict):
         return hashlib.sha256(canonical_json(data).encode()).hexdigest()[:16]
 
 
+def shadow_run_config(cfg: RoutingConfig, config_hashes: set[str]) -> RoutingConfig | None:
+    """The variant of a config file that a shadow run hashed, or None if no variant matches.
+
+    shadow forces routing on and ``--vlm`` turns the VLM on, so the run's hash may be the file's,
+    the file's with routing enabled, or that with the VLM enabled too. Several hashes (a trace
+    mixing runs of different configs) match nothing.
+    """
+    routed = cfg.model_copy(update={"routing_enabled": True})
+    for variant in (cfg, routed, routed.model_copy(update={"vlm": cfg.vlm.model_copy(update={"enabled": True})})):
+        if not config_hashes or config_hashes == {variant.config_hash()}:
+            return variant
+    return None
+
+
 def load_config(path: str | Path) -> RoutingConfig:
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     return RoutingConfig.model_validate(data)
