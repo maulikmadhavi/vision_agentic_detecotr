@@ -59,8 +59,9 @@ clip = { features = ["dev", "clip"], solve-group = "clip" }
 
 [tool.pixi.tasks]
 test = "pytest"
-test-lmstudio = "pytest -m lmstudio"
+test-lmstudio = "pytest -m lmstudio -rs"
 export-schema = "vad-route export-schema --out schemas"
 
 [tool.pixi.feature.clip.tasks]
-test-clip = "pytest -m clip"
+test-clip = "pytest -m clip -rs"
+gpu-check = "python -c 'import torch; print(torch.__version__, torch.cuda.is_available(), [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())])'"
