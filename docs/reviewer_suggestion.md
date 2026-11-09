@@ -2,16 +2,19 @@
 
 Updated 2026-11-10. Resolved findings and superseded architecture proposals have been removed. Requirements and research mapping remain in [specification.md](specification.md); implementation status belongs in [project_board.md](project_board.md). This file records actionable gaps without repeating those documents.
 
-## S4: make observations and scoring provenance trustworthy
+## S4 review: one output-boundary fix remains
 
-S4 should remain a small correctness milestone before adding run-comparison features.
+Reviewed the uncommitted implementation above `732dad6`. **R5-6 is resolved:** fitting validates the originating config hash through `shadow_run_config`, including routing-on and VLM-on CLI overrides; incompatible mixed configs are refused. Matching the entire config is conservative but acceptable for this milestone. **R5-5 is resolved at fitting and evaluation inputs**, including identical/conflicting duplicates and the sample-minimum bypass. Those completed instructions have been removed.
 
-| Open finding | Implication | Suggested implementation and acceptance test |
-|---|---|---|
-| **R5-5: repeated images** — `calibration.fit_relevance`, `fit_relevance_rows`, `metrics.image_results` | Repeating one positive and one negative ten times can satisfy the 10/10 minimum. Evaluation silently keeps the last result for an image while cost reporting counts all rows. | Prefer rejecting duplicate image IDs within one run/arm, including identical repeated rows, with the offending IDs. Validate before fitting, scoring and writing outputs; do not reject the same image appearing in separate comparison runs. Count unique images for fit minima. Test duplicate rows, conflicting results, shuffled input and the two-image minimum bypass. |
-| **R5-6: fit-time score scale** — `calibration.fit_relevance` | The artifact copies the supplied scale without proving the originating trace used it. Loader compatibility checks then trust that incorrect declaration. | Check the originating run config, explicitly accounting for supported shadow/VLM overrides, or persist a compact scoring-provenance record. Bind scale, scorer/build, prompts and preprocessing. Test changed scale, mixed incompatible runs and valid original-config fitting. Do not require irrelevant detector settings to match if using scoring-specific provenance. |
+### P2 — shadow still writes duplicate images (remaining R5-5)
 
-**S4 completion:** focused regressions and the full CPU/mock suite pass; valid fit output remains deterministic; no silent row selection; existing unrelated run identities remain stable. Keep artifact loading checks and frozen-content checks intact. Add no new service or generic validation framework.
+**Location:** `src/routing/cli.py`, `_write_shadow_outputs`; upstream `RoutingPipeline.run` accepts repeated manifest entries.
+
+**Reproduction / implication:** passing `[record, record]` to `_write_shadow_outputs` succeeds and produces two annotation-image entries, two trace rows and `report.images = 2`. Repeating an input image can therefore generate a successful shadow output that the new evaluator refuses. Training/export consumers can still receive duplicates. The new fitting/evaluation checks prevent silent consumption there, but do not satisfy S4's requirement to validate before writing run outputs.
+
+**Suggested fix:** reject repeated manifest image IDs before processing where practical, and validate the collected record IDs by image at the output boundary **before any annotations, trace or report is written**. Apply a clear rule to conflicting files sharing an explicit ID. Avoid calling metric computation merely to validate uniqueness; a small shared ID validator is sufficient. Separate runs may contain the same images.
+
+**Acceptance tests:** duplicate manifest entry and conflicting files with one ID fail clearly; no partial output files are created or existing outputs overwritten; a normal run remains unchanged. Preserve the existing fitting/evaluation duplicate tests and config-override tests. Once this passes, S4 can close; R5-7 remains a separate milestone.
 
 ## Metrics: standard mAP and comparable iterations
 
@@ -28,7 +31,7 @@ S4 should remain a small correctness milestone before adding run-comparison feat
 3. **Compare against both the previous run and the best eligible run.** Show mAP50–95, mAP50 and absolute percentage-point deltas on a consistent scale. Preserve primary-only and always-expensive baselines. Keep per-class/size recall, FP/image, review rate and latency/calls as guardrails so an aggregate improvement cannot hide a costly or important-class regression.
 4. **Treat a plateau as an operational stopping rule, not proof of convergence.** Predeclare a minimum meaningful AP gain, patience window and regression tolerances on development data. Use paired source-group bootstrap intervals when the sample supports them. If improvements are within uncertainty for the patience window, stop tuning and assess the selected candidate on frozen data. Choose numerical thresholds before inspecting frozen results.
 
-**Implementation order:** finish S4 → standard evaluator and explicit prediction-source selection → versioned run-metrics JSON plus a small comparison command/table. A dashboard is optional; no experiment-tracking server is needed initially.
+**Implementation order:** finish the S4 output guard → standard evaluator and explicit prediction-source selection → versioned run-metrics JSON plus a small comparison command/table. A dashboard is optional; no experiment-tracking server is needed initially.
 
 ## Remaining correctness and release gates
 
@@ -39,4 +42,4 @@ S4 should remain a small correctness milestone before adding run-comparison feat
 | **Evaluation provenance** | Reject task-incompatible or incompatible mixed-run traces. Separate descriptive metrics from promotion eligibility; human provenance alone must not override an unverified split/content status. |
 | **Real-data evidence** | Human-reviewed labels, image-transfer permission, difficulty validation, VLM human-label agreement, numeric promotion gates and trainer integration remain dependencies. Refer to the existing board cards and specification research references instead of duplicating their work plans here. |
 
-**Verification context:** source paths above were rechecked for this documentation update. Latest independently completed suite from the preceding review: **487 passed, 7 live tests deselected, one Starlette warning**. Tests were not rerun for this documentation-only cleanup. Only this file was changed.
+**Verification context:** S4 full CPU/mock suite: **499 passed, 7 live tests deselected, one Starlette warning**, 16.59 seconds (`python -B -m pytest -q -p no:cacheprovider` in the Pixi environment, local socket access for FastAPI tests). The duplicate-output reproduction above was run separately with a synthetic fixture. Only this review file was edited; no implementation changes or commits were made.
