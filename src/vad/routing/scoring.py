@@ -70,6 +70,11 @@ def stage_a(
 
     if calibrator is not None:
         probs, any_p = calibrator.calibrate(raw)
+        # R4-1: a low band needs per-class probabilities for every task class and a coherent
+        # aggregate, P(any) >= P(class). Range/finiteness is enforced by the schema.
+        if not (set(cfg.task.class_ids) <= set(probs) and all(any_p >= p - 1e-6 for p in probs.values())):
+            warnings.append("calibrator_output_incomplete_or_inconsistent")
+            incomplete = True
         per_class = {k: ClassRelevance(raw_similarity=v, relevance_probability=probs.get(k)) for k, v in raw.items()}
         band = no_low_if_incomplete("high" if any_p >= t.prob_high else "low" if any_p < t.prob_low else "medium")
         return StageA(per_class=per_class, image_relevance_probability=any_p, relevance_status="calibrated",

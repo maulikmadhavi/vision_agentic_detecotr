@@ -152,3 +152,37 @@ def test_r3_5_human_complete_does_not_clear_open_findings(tmp_path):
     assert failed.status != "complete"
     clean = audit([], sa, dec, [], cfg, human_outcome="complete")
     assert clean.status == "complete" and clean.reviewer_outcome == "complete"
+
+
+# R4-1: incomplete or inconsistent *calibrator* output must not yield a low band ------------------
+
+
+class _ScriptedCalibrator:
+    version = "cal@scripted"
+
+    def __init__(self, probs, any_p):
+        self.probs, self.any_p = probs, any_p
+
+    def calibrate(self, raw):
+        return dict(self.probs), self.any_p
+
+
+def _calibrated(tmp_path, name, calibrator):
+    rel = ScriptedRelevance({"a": {CLASS_A: 0.05, CLASS_B: 0.05}})  # scorer covers every class
+    return RoutingPipeline(config(), ScriptedDetector({"a": []}), RouteStore(tmp_path / f"{name}.sqlite"),
+                           relevance=rel, calibrator=calibrator).process(_entry(tmp_path))
+
+
+def test_r4_1_calibrator_omitting_a_class_is_not_low_relevance(tmp_path):
+    rec = _calibrated(tmp_path, "omit", _ScriptedCalibrator({CLASS_A: 0.01}, 0.02))
+    assert rec.stage_a.relevance_band == "medium"
+    assert "calibrator_output_incomplete_or_inconsistent" in rec.stage_a.warnings
+    assert "low_relevance_zero_boxes" not in rec.route.reason_codes
+
+
+def test_r4_1_inconsistent_aggregate_is_not_low_relevance(tmp_path):
+    # P(any target) = 0.02 < P(CLASS_B) = 0.9 is impossible for a coherent calibrator
+    rec = _calibrated(tmp_path, "agg", _ScriptedCalibrator({CLASS_A: 0.01, CLASS_B: 0.9}, 0.02))
+    assert rec.stage_a.relevance_band == "medium"
+    assert "calibrator_output_incomplete_or_inconsistent" in rec.stage_a.warnings
+    assert "low_relevance_zero_boxes" not in rec.route.reason_codes
