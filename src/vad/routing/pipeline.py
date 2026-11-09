@@ -498,12 +498,17 @@ class RoutingPipeline:
                 and tuple(res.candidate_ids) == tuple(req.candidate_ids) and res.region_xyxy == req.region_xyxy)
 
     def _apply(self, c: FinalCandidate, res: VerificationResult) -> str:
-        """VLM confirms or rejects detector-authored boxes; it never creates or moves one."""
+        """VLM confirms or rejects detector-authored boxes; it never creates or moves one.
+
+        A cross-class conflict is checked first: the VLM answers per class and cannot
+        adjudicate which class (or geometry) is right, so it may neither accept nor
+        reject a conflicted candidate while ``cross_class_always_review`` is on.
+        """
+        if "cross_class_conflict" in c.flags and self.cfg.policy.cross_class_always_review:
+            return "needs_review"
         if res.verdict == "absent":
             return "rejected" if self.cfg.vlm.absent_rejects else "needs_review"
         if res.verdict == "uncertain":
-            return "needs_review"
-        if "cross_class_conflict" in c.flags and self.cfg.policy.cross_class_always_review:
             return "needs_review"
         proposal = any(f.startswith("detector_proposal:") for f in c.flags)
         if not proposal or self.cfg.vlm.accept_confirmed_detector_proposals:

@@ -7,8 +7,14 @@ import json
 import yaml
 
 from vad.routing import cli
+from vad.routing.adapters import RawDetection
+from vad.routing.pipeline import ManifestEntry, RouteStore, RoutingPipeline
 
-from .helpers import CLASS_A, config, draw, make_fixture
+from .helpers import CLASS_A, CLASS_B, FakeVLM, ScriptedDetector, ScriptedRelevance, config, draw, make_fixture
+
+
+def _entry(tmp_path, name="a"):
+    return ManifestEntry(str(draw(tmp_path / f"{name}.png", (320, 240), [])), image_id=name)
 
 
 # R3-1: a reused output directory must not mix earlier runs into the export ---------------------
@@ -40,3 +46,22 @@ def test_r3_1_reused_out_dir_exports_only_the_current_run(tmp_path):
     assert [json.loads(t)["image"]["id"] for t in trace] == ["x"]
     report = json.loads((out / "report.json").read_text(encoding="utf-8"))
     assert report["images"] == 1 and report["errors"] == []  # the first run's corrupt image is not re-reported
+
+
+# R3-2: cross-class conflicts are never silently rejected ---------------------------------------
+
+
+def test_r3_2_cross_class_conflict_survives_vlm_absent(tmp_path):
+    box = (40, 40, 200, 200)
+    primary = ScriptedDetector({"a": [RawDetection(CLASS_A, box, 0.95)]})
+    secondary = ScriptedDetector({"a": [RawDetection(CLASS_B, box, 0.9)]}, "sec@1")
+    rel = ScriptedRelevance({"a": {CLASS_A: 0.4, CLASS_B: 0.4}})  # moderate route -> secondary + VLM
+    cfg = config(vlm={"enabled": True, "absent_rejects": True})
+    vlm = FakeVLM(default="absent")
+    rec = RoutingPipeline(cfg, primary, RouteStore(tmp_path / "r.sqlite"), secondary=secondary,
+                          relevance=rel, vlm=vlm).process(_entry(tmp_path))
+    assert len(vlm.requests) == 2  # both conflicting candidates were asked about
+    assert sorted((c.class_id, c.status) for c in rec.final_candidates) == [
+        (CLASS_A, "needs_review"), (CLASS_B, "needs_review")]
+    assert all("cross_class_conflict" in c.flags for c in rec.final_candidates)
+    assert rec.completeness.status != "complete"
