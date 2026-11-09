@@ -20,12 +20,13 @@ from services_embedding.client import WEMM_TEXT_SCALE, WeMMMCPRelevanceScorer
 
 from .evaluation import route_report
 from .export import export_legacy, export_routed
-from .image_inputs import load_image, load_manifest
+from .image_inputs import ManifestEntry, load_image, load_manifest
+from .interfaces import Detector, RelevanceScorer
 from .pipeline import RoutingPipeline
 from .replay import PrecomputedDetector, PrecomputedRelevance
 from .store import RouteStore, StoreLockedError, job_lock
-from .schemas import ErrorRecord, RouteRecord, export_json_schemas
-from .task_config import load_config
+from .schemas import ErrorRecord, RouteRecord, TaskSpec, export_json_schemas
+from .task_config import RoutingConfig, load_config
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -70,19 +71,7 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
-    if getattr(args, "secondary_predictions", None) and not args.secondary_version:
-        parser.error("--secondary-version is required with --secondary-predictions (model versions are part of the record hash)")
-    if args.cmd == "shadow":
-        remote_flags = (args.primary_model_id, args.primary_revision, args.primary_weights_sha256)
-        if args.primary_url and args.primary_version:
-            parser.error("--primary-version is not used with --primary-url (the version comes from "
-                         "--primary-model-id/--primary-revision)")
-        if args.primary_url and not (args.primary_model_id and args.primary_revision):
-            parser.error("--primary-url needs --primary-model-id and --primary-revision")
-        if not args.primary_url and not args.primary_version:
-            parser.error("--primary-version is required with --primary-predictions")
-        if not args.primary_url and any(remote_flags):
-            parser.error("--primary-model-id/--primary-revision/--primary-weights-sha256 are only with --primary-url")
+    _validate_args(parser, args)
     if args.cmd == "export-schema":
         for f in export_json_schemas(args.out):
             print(f)
@@ -99,16 +88,58 @@ def main(argv: list[str] | None = None) -> int:
         primary = PrecomputedDetector(args.primary_predictions, args.primary_version)
 
     if args.cmd == "legacy":
-        preds = []
-        pipe = RoutingPipeline(cfg, primary, RouteStore(":memory:"))
-        for e in entries:
-            img, ref = load_image(e)
-            preds.append(({"file_name": ref.uri, "width": ref.width, "height": ref.height, "vad_image_id": ref.id},
-                          pipe.legacy_predict(img, ref)))
-        export_legacy(preds, cfg.task, out / "annotations.json")
-        print(f"legacy primary-only export: {out / 'annotations.json'}")
-        return 0
+        return _run_legacy(cfg, primary, entries, out)
+    return _run_shadow(parser, args, cfg, primary, entries, out)
 
+
+def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Flag combinations argparse cannot express; each failure exits with code 2."""
+    if getattr(args, "secondary_predictions", None) and not args.secondary_version:
+        parser.error("--secondary-version is required with --secondary-predictions (model versions are part of the record hash)")
+    if args.cmd != "shadow":
+        return
+    remote_flags = (args.primary_model_id, args.primary_revision, args.primary_weights_sha256)
+    if args.primary_url and args.primary_version:
+        parser.error("--primary-version is not used with --primary-url (the version comes from "
+                     "--primary-model-id/--primary-revision)")
+    if args.primary_url and not (args.primary_model_id and args.primary_revision):
+        parser.error("--primary-url needs --primary-model-id and --primary-revision")
+    if not args.primary_url and not args.primary_version:
+        parser.error("--primary-version is required with --primary-predictions")
+    if not args.primary_url and any(remote_flags):
+        parser.error("--primary-model-id/--primary-revision/--primary-weights-sha256 are only with --primary-url")
+
+
+def _run_legacy(cfg: RoutingConfig, primary: Detector, entries: list[ManifestEntry], out: Path) -> int:
+    preds = []
+    pipe = RoutingPipeline(cfg, primary, RouteStore(":memory:"))
+    for e in entries:
+        img, ref = load_image(e)
+        preds.append(({"file_name": ref.uri, "width": ref.width, "height": ref.height, "vad_image_id": ref.id},
+                      pipe.legacy_predict(img, ref)))
+    export_legacy(preds, cfg.task, out / "annotations.json")
+    print(f"legacy primary-only export: {out / 'annotations.json'}")
+    return 0
+
+
+def _build_relevance_scorer(parser: argparse.ArgumentParser, args: argparse.Namespace,
+                            cfg: RoutingConfig) -> RelevanceScorer | None:
+    if args.relevance_scores:
+        return PrecomputedRelevance(args.relevance_scores, args.relevance_version)
+    if not args.wemm:
+        return None
+    url = os.environ.get("VAD_WEMM_URL")
+    if not url:
+        parser.error("--wemm reads the server endpoint from $VAD_WEMM_URL, which is not set")
+    if cfg.relevance.raw_scale != WEMM_TEXT_SCALE:
+        parser.error(f"--wemm needs relevance.raw_scale: {WEMM_TEXT_SCALE} "
+                     "(with bands chosen for that scale)")
+    return WeMMMCPRelevanceScorer(url=url, model=args.wemm_model, dim=args.wemm_dim, build=args.wemm_build,
+                                  max_side=args.wemm_max_side)
+
+
+def _run_shadow(parser: argparse.ArgumentParser, args: argparse.Namespace, cfg: RoutingConfig, primary: Detector,
+                entries: list[ManifestEntry], out: Path) -> int:
     # Shadow mode: force-enable routing for this run only; nothing is discarded.
     upd = {"routing_enabled": True}
     if args.vlm:
@@ -116,16 +147,7 @@ def main(argv: list[str] | None = None) -> int:
     cfg = cfg.model_copy(update=upd)
     secondary = (PrecomputedDetector(args.secondary_predictions, args.secondary_version)
                  if args.secondary_predictions else None)
-    relevance = PrecomputedRelevance(args.relevance_scores, args.relevance_version) if args.relevance_scores else None
-    if args.wemm:
-        url = os.environ.get("VAD_WEMM_URL")
-        if not url:
-            parser.error("--wemm reads the server endpoint from $VAD_WEMM_URL, which is not set")
-        if cfg.relevance.raw_scale != WEMM_TEXT_SCALE:
-            parser.error(f"--wemm needs relevance.raw_scale: {WEMM_TEXT_SCALE} "
-                         "(with bands chosen for that scale)")
-        relevance = WeMMMCPRelevanceScorer(url=url, model=args.wemm_model, dim=args.wemm_dim, build=args.wemm_build,
-                                          max_side=args.wemm_max_side)
+    relevance = _build_relevance_scorer(parser, args, cfg)
     vlm = None
     if cfg.vlm.enabled:
         try:
@@ -137,18 +159,7 @@ def main(argv: list[str] | None = None) -> int:
         with job_lock(out):
             store = RouteStore(out / "routes.sqlite")
             pipe = RoutingPipeline(cfg, primary, store, secondary=secondary, relevance=relevance, vlm=vlm)
-            # Export only this run's results: a reused --out store may hold records from
-            # earlier runs (other manifests, tasks or configs) that must not leak in.
-            results = pipe.run(entries)
-            records = sorted((r for r in results if isinstance(r, RouteRecord)), key=lambda r: r.image.id)
-            errors = [r for r in results if isinstance(r, ErrorRecord)]
-            export_routed(records, cfg.task, out / "annotations.json")
-            with open(out / "route_trace.jsonl", "w", encoding="utf-8") as f:
-                for r in records:
-                    f.write(r.model_dump_json() + "\n")
-            report = route_report(records)
-            report["errors"] = [e.model_dump(mode="json") for e in errors]
-            (out / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+            report = _write_shadow_outputs(pipe.run(entries), cfg.task, out)
     except StoreLockedError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -157,6 +168,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"warning: relevance scorer failed for {failed['count']} of {report['images']} images "
               f"({failed['types']}); their relevance is 'unavailable' and they were routed to review", file=sys.stderr)
     return 0
+
+
+def _write_shadow_outputs(results: list[RouteRecord | ErrorRecord], task: TaskSpec, out: Path) -> dict:
+    """Write annotations, trace and report for THIS run's results only.
+
+    A reused --out store may hold records from earlier runs (other manifests, tasks or
+    configs); those must not leak into the exports.
+    """
+    records = sorted((r for r in results if isinstance(r, RouteRecord)), key=lambda r: r.image.id)
+    errors = [r for r in results if isinstance(r, ErrorRecord)]
+    export_routed(records, task, out / "annotations.json")
+    with open(out / "route_trace.jsonl", "w", encoding="utf-8") as f:
+        for r in records:
+            f.write(r.model_dump_json() + "\n")
+    report = route_report(records)
+    report["errors"] = [e.model_dump(mode="json") for e in errors]
+    (out / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return report
 
 
 if __name__ == "__main__":
