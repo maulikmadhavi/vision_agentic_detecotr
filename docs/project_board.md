@@ -2,7 +2,7 @@
 
 **Updated:** 2026-11-09 · **Owner:** user · **Implementer:** Claude · **Review log:** [reviewer_suggestion.md](reviewer_suggestion.md)
 
-**Status:** phases 0–4 done, Phase 5 started, Phase 6 not started. Routing is off by default (`routing_enabled: false`). `pixi run test`: 119 passed; live `test-clip` and `test-lmstudio`: 1 passed each. Environments: pixi only. Git: tags `v0.1-phase4-baseline` (208713e) and `v0.2-r3-blockers-fixed` (0435d99); `backup/pre-author-rewrite` holds the pre-rewrite history.
+**Status:** phases 0–4 done, Phase 5 started, Phase 6 not started. Routing is off by default (`routing_enabled: false`). `pixi run test`: 147 passed (re-run by the analysis agent); live `test-clip`, `test-lmstudio`, `test-gdino`, `test-wemm`: 1 passed each (reported by main_agent, synthetic images only). Environments: pixi only. Git: tags `v0.1-phase4-baseline` (208713e) and `v0.2-r3-blockers-fixed` (0435d99); `backup/pre-author-rewrite` holds the pre-rewrite history.
 
 The requirements and acceptance criteria are in [specification.md](specification.md); this board tracks their status only.
 
@@ -12,8 +12,8 @@ The requirements and acceptance criteria are in [specification.md](specification
 |---|---|---|
 | 0. Map pipeline + fixture | **Done** (greenfield) | Baseline metrics need a real detector (T-1). |
 | 1. Contracts + trace | **Done** | — |
-| 2. Stage A + Stage B | **Done**, gaps | Compression and domain-distance signals (T-4); shadow only on the fixture so far (B-1a). |
-| 3. Router + secondary + SAHI | **Done**, gaps | SAHI tested with fake detectors only; no real secondary adapter (T-1, B-8). |
+| 2. Stage A + Stage B | **Done**, gaps | Compression and domain-distance signals (T-4); one scorer per run (T-10 INC 2); shadow only on the fixture and synthetic images so far (B-1a). |
+| 3. Router + secondary + SAHI | **Done**, gaps | Remote detector client and Grounding DINO server exist (F-35, F-36); SAHI through the server ran on the fixture only; no independent secondary (B-8). |
 | 4. VLM + completeness | **Done**, gaps | No way to feed reviewer outcomes back in (T-7). |
 | 5. Calibration + evaluation | **Started** | Utilities only; needs labelled data (T-2), metrics (T-8), calibrators and benchmark (B-2…B-6). |
 | 6. Rollout | **Not started** | B-9. |
@@ -39,7 +39,7 @@ The requirements and acceptance criteria are in [specification.md](specification
 | T-2 | **Build the human-checked sample** (class, domain, resolution, size, crowding, positives/negatives, low similarity); split calibration / development / frozen by source group; lock the frozen set. | Every Phase 5 card needs it. |
 | T-3 | **Independent review** (human or Codex) of `pipeline._candidates`, `_verify`, `_apply`, `policy.route`. | Same model family wrote and reviewed the code. |
 | T-4 | **Stage A gaps:** compression indicator; domain-distance when a reference distribution exists (`StageA.domain_distance` is never filled). | Spec Stage A list; domain-shift audit sampling (rule 7). |
-| T-10 | **Remote embedding scorer (user's WeMM server, reached over VPN):** a client that gets (a) text-image relevance per class and (b) image-image matching against per-class reference images. Each is its own score with its own scale id and revision; never averaged with CLIP. Needs: Stage A to hold more than one scorer (a combination policy comes later, after calibration), a place for reference images in the class registry, reference-embedding cache, endpoint and any credential by env reference (no address in git), strict error handling (`isError` is an error, never a 0 score). Server reports no build or revision yet (pending fix on its side): record it as unverified until then. Plan first, then build. | Second relevance signal; image-image matching is new (not in the original spec). |
+| T-10 | **Remote embedding scorer, remaining increments.** INC 1 (text-image relevance) is done (F-37). **INC 2:** Stage A holds several scorers side by side (schema bump, one designated primary, none averaged); waits for the user's answer: replace CLIP or run beside it. **INC 3:** image-image matching against per-class reference images (max cosine, references in a separate manifest, group isolation from frozen images); needs a spec line and the user's reference images. Server reports no build yet: runs record `@unverified` until `--wemm-build` is passed. | Second relevance signal; image-image matching is new (not in the original spec). |
 | T-7 | **Reviewer-outcome ingestion:** a way to record human decisions per finding (accept/reject box, class adjudication, "complete") and re-audit. `completeness.audit` accepts `human_outcome` / `reference_boxes`, but no pipeline or CLI path passes them. | The human queue is one-way today; R3-5 noted the missing adjudication record. |
 | T-8 | **Detection metrics:** mAP50–95, class- and size-stratified recall, FP/image, annotation precision/completeness against ground truth. Only route/cost reports and VLM agreement exist. | Needed for the frozen benchmark (B-5) and baseline metrics. |
 | T-9 | **Enforce split isolation in runs:** `vad-route shadow` takes no split or frozen lock, so `check_isolation` / `assert_not_frozen` are never applied outside tests. | Spec: frozen images must never reach training or threshold fitting. |
@@ -73,14 +73,14 @@ The requirements and acceptance criteria are in [specification.md](specification
 | Stage A | Image validity, resolution, blur, exposure | ✅ | F-6 |
 | | Compression indicator | ❌ | T-4 |
 | | Domain-distance indicator | ❌ | T-4 |
-| | Per-class text–image similarity with positive/negative prompts | ✅ | F-25 (CLIP) |
+| | Per-class text–image similarity with positive/negative prompts | ✅ CLIP (live-tested); ⚠️ WeMM server scorer uses positive prompts only | F-25, F-37 |
 | | Calibrated relevance probabilities | ⚠️ protocol + guards, no calibrator | B-2; F-31–F-33 |
 | Stage B | Box area, crowding, confidence, ambiguity, count, high-relevance/zero-box contradiction | ✅ | F-7 |
 | | `difficulty_pre_secondary` and `difficulty_final` both kept | ✅ | F-7 |
 | | Calibrated difficulty | ❌ heuristic only | B-2 |
-| Detectors | Primary detector through an adapter | ⚠️ precomputed replay only | T-1 |
+| Detectors | Primary detector through an adapter | ⚠️ replay; remote client + Grounding DINO server built and live-tested on synthetic images, not on real images | F-35, F-36, T-1 |
 | | Optional independent secondary | ⚠️ protocol, no real adapter | B-8 |
-| | SAHI with original-coordinate mapping | ⚠️ native slicer, fake detectors only | F-10, T-1 |
+| | SAHI with original-coordinate mapping | ⚠️ native slicer; real crop-capable client exists, not exercised on real images | F-10, F-35, T-1 |
 | Policy | Pure deterministic rules, hash-sampled audits, replay across processes | ✅ | F-8 |
 | | Rules 1–6, 8 (error queue, zero boxes ≠ easy, escalation, caps) | ✅ | F-8, F-14 |
 | | Rule 7: audit pool incl. poor quality (done) and domain shift (not done) | ⚠️ | T-4 |
@@ -122,6 +122,7 @@ The requirements and acceptance criteria are in [specification.md](specification
 | F-34 | Environments managed with pixi (`default`, `clip` with CUDA 12.8 torch) | 2267644 |
 | F-35 | Services increment 1: `svc-1.0` wire contract + `RemoteDetector` (existing `Detector` protocol; one POST, hard timeout, no retry; failures raise → error queue/review; model revision and weights digest checked and bound into the run key; pixel cap before any call). 20 tests with mocked HTTP | 7bd7c2e |
 | F-36 | Grounding DINO detector service in `third_party_service/` (own pixi workspace, `svc-1.0`, one forward pass per class so no phrase mapping; weights pinned to HF revision a2bb814 + SHA-256, verified at start; thresholds in the revision string; server-measured `gpu_ms`). Measured on the RTX 5070: ~390 ms/image for 2 classes, 1.76 GiB peak, 9.6 of 12.2 GiB with LM Studio Qwen loaded. Live test behind marker `gdino`; service tests not in CI | e65ff6d |
+| F-37 | T-10 INC 1: `RemoteRelevanceScorer` for the user's WeMM MCP server (`--wemm`, URL from `$VAD_WEMM_URL`, never in git): scale `wemm_text_cosine_v1`, max cosine over positive prompts, longest side ≤ 448 px, one retry on network errors only, errors never become a score of 0, meta checked per response. **Behavior change:** any scorer exception now leaves relevance `unavailable` and the image in review (it was lost to the error queue). 28 tests + live test behind marker `wemm` | 9eeef4c |
 | D-8 | Work committed incrementally; author email rewritten to gmail (user's choice) | — |
 
 ## Acceptance tests (from the spec)
@@ -181,8 +182,8 @@ There was no existing detector repository, so each interface is a neutral defaul
 
 | # | Assumption | Status |
 |---|---|---|
-| 1 | No real primary detector; shadow replays saved predictions | **Open** → T-1 |
-| 2 | No text–image relevance model | **Resolved** (F-25); bands still placeholders → D-5 |
+| 1 | No real image evaluation of any detector: remote client and Grounding DINO server exist, tested on synthetic images only | **Open** → T-1 |
+| 2 | Text–image relevance: CLIP and the WeMM server exist; bands still placeholders for both | **Open** → D-5 |
 | 3 | No calibrators; nothing auto-marked `complete`; shadow review rate ≈ 100% by design | **Open** → B-2 |
 | 4 | GPU time only from adapters that measure it | **Decided** → D-6 |
 | 5 | COCO-style export until a trainer exists | **Open** → B-7 |
@@ -195,7 +196,7 @@ There was no existing detector repository, so each interface is a neutral defaul
 
 ```bash
 pixi install                    # add `-e clip` for the CLIP scorer
-pixi run test                   # 119 tests, no network / GPU
+pixi run test                   # 147 tests, no network / GPU
 pixi run -e clip test-clip      # live CLIP (local weights)
 pixi run test-lmstudio          # live VLM (LM Studio)
 pixi run vad-route shadow --config configs/routing/example.yaml --images manifest.jsonl \
