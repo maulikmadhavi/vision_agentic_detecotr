@@ -1,5 +1,66 @@
 # Reviewer suggestions — adaptive object detection routing
 
+## Cleanup plan: three model integrations — 2026-11-09
+
+**Requested target:** flatten the integrations directly under `src/` as `services_embedding`, `service_detector_vlm`, and `service_detector_gdino`, alongside `routing`. Remove the enclosing `services` package, OpenCLIP support and LM Studio-specific client naming. Use a generic OpenAI-compatible VLM call. This section supersedes earlier nested layouts and the recommendation to retain parked CLIP code. Only this review file is changed; preserve concurrent implementation and documentation work.
+
+### Minimal target layout (proposed)
+
+```text
+src/services_embedding/
+  __init__.py
+  client.py                   existing WeMMMCPRelevanceScorer; remote MCP only
+src/service_detector_vlm/
+  __init__.py
+  openai_service_call.py      OpenAICompatibleVerifier; existing httpx transport
+src/service_detector_gdino/
+  __init__.py
+  client.py                   existing RemoteDetector
+  contracts.py                existing svc-1.0 detector wire models
+  server.py, runtime.py       existing Grounding DINO server + GPU/hash helpers
+  smoke.py, README.md
+  pixi.toml, pixi.lock         separate GPU server environment
+src/routing/
+  replay.py                   moved file-based replay adapters
+  ...                         existing routing/domain modules
+```
+
+These packages sit one level below `src/`; files sit directly inside them. Names follow the user's requested spelling, including plural `services_embedding`. Keep WeMM on the existing external embedding service. `service_detector_vlm` remains a **verifier** implementing `VLMVerifier.verify`; its folder name must not imply that it now generates boxes. Keep request binding, `present/absent/uncertain`, and detector-authored geometry. No new gateway, model registry, base client hierarchy or mandatory OpenAI SDK is needed.
+
+**Packaging/path changes required by flattening:**
+
+- Set Hatch wheel packages to `src/routing`, `src/services_embedding`, `src/service_detector_vlm`, and `src/service_detector_gdino`; remove `src/services` after all callers move. These remain import packages in the existing distribution, not four independently published distributions.
+- Use imports such as `from services_embedding.client import WeMMMCPRelevanceScorer`, `from service_detector_vlm.openai_service_call import OpenAICompatibleVerifier`, and `from service_detector_gdino.client import RemoteDetector`. The server imports its contracts/runtime from `service_detector_gdino`.
+- Grounding DINO startup becomes `pixi run -m src/service_detector_gdino/pixi.toml serve`. Its editable root dependency changes from `../../..` to `../..`. If tests retain their current location, its test task changes to `pytest -q ../../tests/services/grounding_dino`. Update detached-environment configuration, lockfiles, smoke commands and README paths together.
+- Update CI import smoke checks, service-resolution tests and all source links. `tests/services` can remain an organizational test folder; preserve `tests/__init__.py` and relevant package markers. Keep the `vad-route` command and persisted identifiers stable except for the deliberate VLM identity migration below.
+
+### Removal and migration instructions
+
+| Step | Existing code or configuration | Instruction / completion evidence |
+|---|---|---|
+| 1. Remove OpenCLIP as one coherent change | `src/services/open_clip.py`, `tests/services/test_clip_live.py`; `routing/cli.py` CLIP parser/import/construction branches | Delete the scorer and its dedicated live test. Remove `--clip-weights`, `--clip-arch` and their scale-check branch. Keep the generic pipeline score-scale guard and replay support. Confirm obsolete CLI flags fail clearly instead of being silently ignored. |
+| 2. Remove its environment footprint | `pyproject.toml`: `clip` extra, pytest marker/exclusion, Pixi feature/index override, environment, `test-clip`, and root clip-only `gpu-check` | Remove those entries and regenerate locks with Pixi, including the service lock if the editable root dependency metadata changes. Do not hand-delete lock entries: shared transitive dependencies can still be required. Keep torch/transformers/CUDA dependencies in the Grounding DINO workspace. The root development environment still needs FastAPI for fake-server tests. |
+| 3. Generalize the VLM client | `services/lmstudio.py:LMStudioVerifier` → `service_detector_vlm/openai_service_call.py:OpenAICompatibleVerifier` | Retain the current multimodal Chat Completions request and response parser. Make base URL/model explicit deployment configuration; keep endpoint/model examples for the current local installation in docs. Support optional authorization via an environment-variable reference; do not put secrets in YAML, traces or cache identity. Update CLI construction, acceptance tests, golden identity tests and all imports. |
+| 4. Define the supported compatibility contract | Existing VLM JSON-schema request and LM Studio assumptions | Document that the endpoint must accept image data URIs and the chosen structured-output format. Keep one HTTP attempt and uncertain-on-failure. If another server needs a different response format, select it explicitly in configuration; do not silently retry a rejected schema request. `/models` is not universally available or proof that vision/schema inference works, so use an actual synthetic inference for the live readiness check. |
+| 5. Preserve cache correctness during generalization | Current `model_version` returns `lmstudio:{model}`; `test_run_identity.py` asserts that value and its resulting record key | A module/class move alone should preserve identity. Replacing provider-specific identity needs an explicit migration: record an endpoint deployment/revision identifier with the model, intentionally produce new keys, and update the golden expectation with a migration note. Do not reuse an old result merely because two endpoints advertise the same model name. Keep old SQLite runs readable; no automatic cache deletion. |
+| 6. Flatten the remaining clients | `wemm_mcp.py`, `http_detector.py`, `contracts.py`, `grounding_dino/` | Move directly to the three top-level integration packages above; remove the enclosing `src/services` once all imports and packaging entries are updated. Apply the relative Pixi path corrections above. Keep `WeMMMCPRelevanceScorer` provider-specific because it validates WeMM metadata. Preserve `wemm_text_cosine_v1`, `svc-1.0`, coordinate conversion and detector artifact checks. |
+| 7. Remove single-consumer support modules from the service root | `services/runtime.py`, `services/replay.py` | After CLIP removal, move GPU timing/hashing beside Grounding DINO, updating its server import; retain both helpers because they are used. Move replay adapters to `routing/replay.py`: replay is local file I/O, not a fourth model service. Update test imports. Do not delete replay/legacy behavior during this service cleanup. |
+| 8. Remove remaining names and stale instructions | README; board D-5/T-10, F-25/F-39, integration/hardware/run sections; specification layout/CLIP examples; Grounding DINO README; test task names | Remove active CLIP setup, weights path/hash, extra VRAM estimate, score calibration advice and commands. Replace client-level LM Studio wording with OpenAI-compatible VLM, leaving LM Studio as an optional deployment example. Rename `test_lmstudio_live.py`, the `test-lmstudio` task and the `lmstudio` marker to VLM equivalents and update default marker exclusions. Preserve historical results explicitly as historical. |
+
+### Other dangling-code checks
+
+- **No additional unused production imports were confirmed** by a lightweight AST scan. The reported `routing/__init__.py` names are public re-exports; keep them. Do not delete symbols from this scan without checking import/discovery behavior.
+- `SliceResult.raw_count`, `RouteStore.records/errors`, frozen-set helpers and the annotation loader have test callers. Frozen-set enforcement and reviewer ingestion are incomplete workflows, not evidence that their helper code is dead. Keep these functions until their requirements are explicitly retired or integrated.
+- The new `tests/services/live.py` and `test_three_services_live.py` are active, uncommitted integration work. Rename `require_lmstudio` and update all three-service tests to use endpoint/model configuration. Fix `_port_open`'s default port selection: an HTTPS URL without an explicit port currently probes 80; select 443 for HTTPS. Keep reachability skips distinct from successful inference, and offer a required-services validation mode that fails when a release check cannot run.
+- `tests/services/test_clip_live.py`'s weight discovery, CLIP background prompts, text cache, and CLIP-specific GPU/wall timing fields can disappear with the scorer. Do not generalize or retain these as unused scaffolding.
+- Empty `__init__.py` files establish package boundaries and avoid the tested `tests.services` shadowing problem; retain them. Keep negative prompts in the task schema during this cleanup: they are part of existing task/config contracts, although WeMM currently ignores them. Removing that field is a separate schema/config migration.
+
+### Implementation order and checks
+
+Remove CLIP and regenerate locks → generalize VLM transport/config and decide its identity migration → move the three integrations/support modules → update tests/tasks/docs. Make each stage importable and testable before the next; avoid mixing this with the larger pipeline refactor proposed below.
+
+Run default CPU/mock tests (including fake Grounding DINO endpoints), schema drift and run-identity tests, and a locked installation/import smoke check. Re-run the service workspace's fake-model suite after paths change. With synthetic images, explicitly exercise embedding, generic VLM and GDINO, then all three together; record passes/skips and the configured models/revisions. Search active source/tests/config/tasks for `open_clip`, `OpenClip`, `VAD_CLIP`, `--clip-`, `test-clip`, `LMStudioVerifier`, and old module paths; remaining matches need a deliberate historical/deployment reason. This plan is based on code/reference inspection, not a new test run.
+
 ## Simplicity and readability review — 2026-11-09
 
 **Recommendation:** retain the current `routing` / `services` split and simplify inside the larger functions. Optimize for following one image from input to output and changing one behavior in one place. More folders, base classes, generic runners or compressed expressions would add little value now.
