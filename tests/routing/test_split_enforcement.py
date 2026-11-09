@@ -208,6 +208,54 @@ def test_evaluate_refuses_a_trace_with_a_repeated_image_before_writing(tmp_path,
     assert exc.value.code == 2 and "p0-0" in capsys.readouterr().err and not (tmp_path / "m.json").exists()
 
 
+# --- R5-7: one cohort for accuracy and cost --------------------------------------------------------
+
+
+def _frozen_and_development_records(tmp_path):
+    paths, target, white = _frozen_image_files(tmp_path)
+    manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+    development = sorted(i for i, img in manifest["images"].items() if img["split"] == "development")[0]
+    frozen = RoutingPipeline(config(), ScriptedDetector({}), RouteStore(":memory:")).process(
+        ManifestEntry(str(white), image_id=target))
+    dev = _record(tmp_path, development)
+    slow = dev.model_copy(update={"trace": dev.trace.model_copy(update={"elapsed_ms": 9e6})})
+    return paths, frozen, slow
+
+
+def _metrics(paths, tmp_path, records, name):
+    paths["trace"].write_text("".join(r.model_dump_json() + "\n" for r in records), encoding="utf-8")
+    assert _evaluate(paths, tmp_path / name, "--split-manifest", str(paths["manifest"]),
+                     "--frozen-lock", str(paths["lock"])) == 0
+    return json.loads((tmp_path / name).read_text(encoding="utf-8"))
+
+
+def test_a_slow_development_record_changes_no_frozen_metric(tmp_path):
+    """The reviewer's case: one frozen and one development result reported two cost images."""
+    paths, frozen, slow = _frozen_and_development_records(tmp_path)
+    alone = _metrics(paths, tmp_path, [frozen], "alone.json")
+    mixed = _metrics(paths, tmp_path, [frozen, slow], "mixed.json")
+    assert mixed.pop("out_of_cohort") == {"results": 1, "image_ids": [slow.image.id]}
+    assert alone.pop("out_of_cohort") == {"results": 0, "image_ids": []}
+    assert mixed == alone and mixed["cost"]["images"] == 1
+
+
+def test_labelled_images_without_a_result_stay_operational_failures_of_the_cohort(tmp_path):
+    paths, frozen, slow = _frozen_and_development_records(tmp_path)
+    doc = _metrics(paths, tmp_path, [frozen, slow], "m.json")
+    assert doc["images"]["labelled"] == 10 and doc["images"]["with_result"] == 1
+    assert len(doc["images"]["operational_failures"]) == 9 and slow.image.id not in doc["images"]["operational_failures"]
+
+
+def test_without_a_split_the_cohort_is_every_labelled_image(tmp_path):
+    paths, *_ = _split_files(tmp_path)
+    labelled, unlabelled = _record(tmp_path, "p0-0"), _record(tmp_path, "not-labelled")
+    paths["trace"].write_text(labelled.model_dump_json() + "\n" + unlabelled.model_dump_json() + "\n",
+                              encoding="utf-8")
+    assert _evaluate(paths, tmp_path / "m.json") == 0
+    doc = json.loads((tmp_path / "m.json").read_text(encoding="utf-8"))
+    assert doc["cost"]["images"] == 1 and doc["out_of_cohort"] == {"results": 1, "image_ids": ["not-labelled"]}
+
+
 @pytest.mark.parametrize("flag", ["--split-manifest", "--frozen-lock"])
 def test_evaluate_needs_both_split_flags_or_neither(tmp_path, capsys, flag):
     paths, *_ = _split_files(tmp_path)

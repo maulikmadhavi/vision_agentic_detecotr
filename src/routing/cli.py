@@ -88,7 +88,8 @@ def _parser() -> argparse.ArgumentParser:
     ra.add_argument("--out-dir", required=True, help="directory for reviewed.jsonl and annotations.json")
     ra.add_argument("--split-manifest", help="split manifest; tags each exported image with vad_split")
     fr = sub.add_parser("fit-relevance", help="fit a relevance calibrator on the calibration split")
-    fr.add_argument("--config", required=True, help="config with the declared relevance.raw_scale and the task")
+    fr.add_argument("--config", required=True, help="the config file the shadow run used (its hash must match the "
+                                                    "trace, allowing shadow's routing/--vlm overrides)")
     fr.add_argument("--trace", required=True, help="route_trace.jsonl of a shadow run over calibration images")
     fr.add_argument("--labels", required=True, help="ground-truth labels (COCO JSON with vad_* fields)")
     fr.add_argument("--split-manifest", required=True, help="only calibration-split images may be used")
@@ -222,9 +223,14 @@ def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
                 parser.error(f"a frozen result was routed on other image content: {e}")
             split = {"status": "verified frozen_eval", **split,
                      "image_content": "bound: each frozen result matches the lock's sha256 and size"}
+    # One cohort for accuracy AND cost: the labelled images in scope (the frozen ones when a split is
+    # given). Labelled images without a result stay in it as operational failures; other results
+    # are only listed, so a development or unlabelled record cannot change any cohort metric.
+    cohort = [r for r in records if r.image.id in ground_truth]
+    outside = sorted(r.image.id for r in records if r.image.id not in ground_truth)
     metrics = {"evidence_status": evidence_status(label_doc), "split": split,
-               **evaluate(ground_truth, task.class_ids, results, args.iou),
-               "cost": route_report(records)}
+               **evaluate(ground_truth, task.class_ids, {r.image.id: results[r.image.id] for r in cohort}, args.iou),
+               "cost": route_report(cohort), "out_of_cohort": {"results": len(outside), "image_ids": outside}}
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
