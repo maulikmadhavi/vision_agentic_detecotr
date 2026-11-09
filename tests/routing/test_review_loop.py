@@ -182,6 +182,47 @@ def test_a_later_decision_on_the_same_finding_supersedes_the_earlier_one(tmp_pat
     assert [a.decision for a in reviewed.adjudications] == ["reject", "accept"]  # history kept
 
 
+# --- R5-3: a class cannot be both present (an accepted box) and absent -------------------------
+
+
+def test_accepting_a_box_and_declaring_its_class_absent_is_a_conflict(tmp_path):
+    rec = _run(tmp_path, "r")
+    cand = _candidate(rec)
+    adjs = [_adj(rec, "accept", candidate_id=cand.id), _adj(rec, "class_absent", class_id=CLASS_A),
+            _adj(rec, "class_absent", class_id=CLASS_B), _adj(rec, "complete")]
+    with pytest.raises(ReviewError, match=f"{cand.id}.*{CLASS_A}"):
+        apply_adjudications([rec], adjs, config())
+
+
+def test_reclassifying_a_box_into_a_class_declared_absent_is_a_conflict(tmp_path):
+    rec = _run(tmp_path, "r")
+    cand = _candidate(rec)
+    adjs = [_adj(rec, "reclassify", candidate_id=cand.id, class_id=CLASS_B), _adj(rec, "class_absent", class_id=CLASS_B)]
+    with pytest.raises(ReviewError, match=f"{cand.id}.*{CLASS_B}"):
+        apply_adjudications([rec], adjs, config())
+
+
+def test_declaring_absent_the_class_of_a_box_the_model_already_accepted_is_a_conflict(tmp_path):
+    rec, cfg = _scenarios(tmp_path)["accepted"]
+    cand = _candidate(rec)
+    assert cand.status == "accepted"  # accepted by the routing policy, no human decision
+    with pytest.raises(ReviewError, match=f"{cand.id}.*{CLASS_A}"):
+        apply_adjudications([rec], [_adj(rec, "class_absent", class_id=CLASS_A)], cfg)
+
+
+@pytest.mark.parametrize("decide", [
+    lambda rec, cand: [_adj(rec, "reject", candidate_id=cand.id)],
+    lambda rec, cand: [_adj(rec, "accept", candidate_id=cand.id), _adj(rec, "reject", candidate_id=cand.id)],
+    lambda rec, cand: [_adj(rec, "reclassify", candidate_id=cand.id, class_id=CLASS_B)],
+], ids=["reject", "accept-then-reject", "reclassified-away"])
+def test_absence_is_allowed_once_no_accepted_box_of_that_class_remains(tmp_path, decide):
+    rec = _run(tmp_path, "r")
+    cand = _candidate(rec)
+    adjs = decide(rec, cand) + [_adj(rec, "class_absent", class_id=CLASS_A), _adj(rec, "complete")]
+    (reviewed,) = apply_adjudications([rec], adjs, config())
+    assert not [c for c in reviewed.final_candidates if c.status == "accepted" and c.class_id == CLASS_A]
+
+
 # --- refusals -----------------------------------------------------------------------------------
 
 

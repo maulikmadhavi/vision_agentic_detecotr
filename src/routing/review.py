@@ -130,6 +130,11 @@ def _review_one(record: RouteRecord, adjudications: Sequence[Adjudication], cfg:
         candidates.append(FinalCandidate(id=stable_id("cand", [box.id]), class_id=box.class_id, box_xyxy=box.box_xyxy,
                                          status="accepted", source_ids=(box.id,), canonical_source_id=box.id,
                                          flags=("human_added",)))
+    # R5-3: an accepted box (accepted by the policy, by a human or by reclassification) says its class
+    # is present, so class_absent for that class is a contradiction; the box is never dropped silently.
+    if clashes := sorted(f"{c.id} ({c.class_id})" for c in candidates if c.status == "accepted" and c.class_id in absent):
+        raise ReviewError(f"record {record.record_id}: class_absent contradicts accepted candidate(s) {clashes}; "
+                          "reject or reclassify the candidate, or do not declare its class absent")
     effective = [*by_candidate.values(), *added, *absent.values(),
                  *(a for a in adjudications if a.decision == "complete")]
     completeness = audit(candidates, record.stage_a, record.route, [v for v in record.verifications if not v.candidate_ids],
@@ -145,6 +150,8 @@ def apply_adjudications(records: Sequence[RouteRecord], adjudications: Sequence[
 
     Records are never modified: model suggestions stay in the RouteRecords, and each result is
     a separate ReviewedRecord. With no adjudications the re-audit reproduces the original one.
+    Contradictions are refused (ReviewError): class_absent together with add_box for that class, or
+    with any accepted candidate of that class (policy-accepted, accepted or reclassified into it).
     """
     by_id = {r.record_id: r for r in records}
     for r in records:
