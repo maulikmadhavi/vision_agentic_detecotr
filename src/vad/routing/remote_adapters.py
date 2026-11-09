@@ -104,7 +104,7 @@ class RemoteDetector:
 
 
 @dataclass
-class RemoteRelevanceScorer:
+class WeMMMCPRelevanceScorer:
     """Text-image relevance from a WeMM-Embedding MCP server (``compute_similarity``, cosine).
 
     Implements the existing ``RelevanceScorer`` protocol. One JSON-RPC POST per image
@@ -195,3 +195,6 @@ class RemoteRelevanceScorer:
         for i, class_id in enumerate(owners):
             out[class_id] = max(out.get(class_id, -math.inf), by_index[i])
         return out
+
+
+RemoteRelevanceScorer = WeMMMCPRelevanceScorer  # old name, kept as an alias

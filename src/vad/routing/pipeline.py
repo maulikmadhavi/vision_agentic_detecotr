@@ -464,7 +464,7 @@ class RoutingPipeline:
                     res = vlm.verify(image, req, names[req.class_id])
                 except Exception as e:  # adapters should not raise, but never trust that
                     res = uncertain(req, "vlm_unavailable", vlm.model_version, type(e).__name__)
-                if not self._answers(res, req):
+                if not self._verification_matches_request(res, req):
                     res = uncertain(req, "vlm_contradictory", vlm.model_version)
             self.store.put_step(key, f"vlm:{req.id}", res.model_dump(mode="json"))
             return res
@@ -484,7 +484,7 @@ class RoutingPipeline:
             res = ask(req)
             verifications.append(res)
             flags = c.flags + ("vlm_absent",) if res.verdict == "absent" and not cfg.vlm.absent_rejects else c.flags
-            updated.append(c.model_copy(update={"status": self._apply(c, res), "verification": res, "flags": flags}))
+            updated.append(c.model_copy(update={"status": self._candidate_status_after_verification(c, res), "verification": res, "flags": flags}))
 
         accepted_classes = {c.class_id for c in updated if c.status == "accepted"}
         missing: list[VerificationResult] = []
@@ -500,12 +500,12 @@ class RoutingPipeline:
         return sorted(updated, key=lambda c: c.id), verifications, missing, calls
 
     @staticmethod
-    def _answers(res: object, req: VerificationRequest) -> bool:
+    def _verification_matches_request(res: object, req: VerificationRequest) -> bool:
         """True only if ``res`` is a verification of exactly this request (class, candidates, region)."""
         return (isinstance(res, VerificationResult) and res.request_id == req.id and res.class_id == req.class_id
                 and tuple(res.candidate_ids) == tuple(req.candidate_ids) and res.region_xyxy == req.region_xyxy)
 
-    def _apply(self, c: FinalCandidate, res: VerificationResult) -> str:
+    def _candidate_status_after_verification(self, c: FinalCandidate, res: VerificationResult) -> str:
         """VLM confirms or rejects detector-authored boxes; it never creates or moves one.
 
         A cross-class conflict is checked first: the VLM answers per class and cannot

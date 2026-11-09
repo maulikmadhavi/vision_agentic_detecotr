@@ -1,4 +1,4 @@
-"""Contract tests for RemoteRelevanceScorer (WeMM over MCP JSON-RPC) with fake HTTP (no server, no VPN)."""
+"""Contract tests for WeMMMCPRelevanceScorer (WeMM over MCP JSON-RPC) with fake HTTP (no server, no VPN)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import pytest
 from PIL import Image
 
 from vad.routing.pipeline import ManifestEntry, RouteStore, RoutingPipeline
-from vad.routing.remote_adapters import RemoteRelevanceScorer, RemoteScorerError
+from vad.routing.remote_adapters import RemoteScorerError, WeMMMCPRelevanceScorer
 from vad.routing.schemas import RouteRecord
 
 from ..routing.helpers import CLASS_A, CLASS_B, ScriptedDetector, config, draw
@@ -45,7 +45,7 @@ def server(reply, calls):
 
 def scorer(reply, calls=None, **kw):
     calls = [] if calls is None else calls
-    return RemoteRelevanceScorer(url=URL, transport=server(reply, calls), **kw), calls
+    return WeMMMCPRelevanceScorer(url=URL, transport=server(reply, calls), **kw), calls
 
 
 def _img(w=320, h=240):
@@ -193,7 +193,7 @@ def test_cli_wemm_scores_stage_a(tmp_path, monkeypatch):
     from vad.routing import cli
     calls = []
     monkeypatch.setenv("VAD_WEMM_URL", URL)
-    monkeypatch.setattr(cli, "RemoteRelevanceScorer", lambda **kw: RemoteRelevanceScorer(
+    monkeypatch.setattr(cli, "WeMMMCPRelevanceScorer", lambda **kw: WeMMMCPRelevanceScorer(
         transport=server(lambda b, n: rpc_result(scores_payload([0.4, 0.05][:len(b["params"]["arguments"]["right"])])),
                          calls), **kw))
     out = tmp_path / "out"
@@ -201,3 +201,17 @@ def test_cli_wemm_scores_stage_a(tmp_path, monkeypatch):
     trace = [json.loads(line) for line in (out / "route_trace.jsonl").read_text(encoding="utf-8").splitlines()]
     assert {t["run"]["relevance_scorer"] for t in trace} == {"wemm:tencent/WeMM-Embedding-4B/d2560@unverified+max448"}
     assert all(t["stage_a"]["per_class"][CLASS_A]["raw_similarity"] == 0.4 for t in trace) and calls
+
+
+def test_rename_keeps_run_keys_and_old_name_alias():
+    # Golden key computed with the class under its previous name (RemoteRelevanceScorer):
+    # the rename must not change model_version, RunInfo or the record key.
+    from vad.routing import remote_adapters
+    from vad.routing.remote_adapters import WeMMMCPRelevanceScorer
+    from vad.routing.schemas import ImageRef
+
+    ref = ImageRef(id="a", uri="a.png", width=320, height=240, sha256="0" * 64)
+    pipe = RoutingPipeline(config(relevance=WEMM_CFG), ScriptedDetector({}), RouteStore(":memory:"),
+                           relevance=WeMMMCPRelevanceScorer(url=URL))
+    assert pipe.record_key(ref) == "rec-e025bfad645c479b"
+    assert remote_adapters.RemoteRelevanceScorer is WeMMMCPRelevanceScorer

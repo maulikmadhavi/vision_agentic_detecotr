@@ -18,7 +18,7 @@ from .adapters import LMStudioVLM, PrecomputedDetector, PrecomputedRelevance
 from .evaluation import route_report
 from .export import export_legacy, export_routed
 from .pipeline import RouteStore, RoutingPipeline, StoreLockedError, job_lock, load_image, load_manifest
-from .remote_adapters import WEMM_TEXT_SCALE, RemoteDetector, RemoteRelevanceScorer
+from .remote_adapters import WEMM_TEXT_SCALE, RemoteDetector, WeMMMCPRelevanceScorer
 from .schemas import ErrorRecord, RouteRecord, export_json_schemas
 from .task_config import load_config
 
@@ -127,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
         if cfg.relevance.raw_scale != WEMM_TEXT_SCALE:
             parser.error(f"--wemm needs relevance.raw_scale: {WEMM_TEXT_SCALE} "
                          "(with bands chosen for that scale)")
-        relevance = RemoteRelevanceScorer(url=url, model=args.wemm_model, dim=args.wemm_dim, build=args.wemm_build,
+        relevance = WeMMMCPRelevanceScorer(url=url, model=args.wemm_model, dim=args.wemm_dim, build=args.wemm_build,
                                           max_side=args.wemm_max_side)
     vlm = LMStudioVLM(cfg.vlm.base_url, cfg.vlm.model, cfg.vlm.timeout_s, cfg.vlm.max_tokens,
                       cfg.vlm.crop_padding) if cfg.vlm.enabled else None
