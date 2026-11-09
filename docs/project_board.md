@@ -51,8 +51,8 @@ The original plan (spec text and Codex prompt) lives in git history (`git show 2
 | B-1b | Live primary and real SAHI shadow | T-1 |
 | B-2 | Relevance calibrator (P(any target), class correlation) and difficulty calibrator (defined failure event) | T-2 |
 | B-3 | Threshold fitting under explicit constraints, bootstrap by source group; record calibrator versions + data hash | T-2, B-2 |
-| B-4 | Numeric promotion targets in config **before** the frozen run | user, T-2 |
-| B-5 | Frozen benchmark: primary-only vs always-expensive vs adaptive, incl. low-relevance FN audit | T-1, T-2, T-8, B-3, B-4 |
+| B-4 | Numeric promotion targets in config **before** the frozen run: max missed relevant images at the relevance gate, min recall on hard/small objects, max FP/image, cost budget. Gate: meet recall/FN constraints, cut cost vs always-expensive, no material precision loss vs primary-only | user, T-2 |
+| B-5 | Frozen benchmark: primary-only vs always-expensive vs adaptive. Report mAP50–95, stratified recall, missed-instance recovery, FP/image, annotation precision/completeness, review rate, latency percentiles, GPU s/image, VLM calls/image, route confusion by domain, low-relevance FN audit | T-1, T-2, T-8, B-3, B-4 |
 | B-6 | VLM agreement on real human labels, 4B vs 8B; decides D-4 | T-2, D-7 |
 | B-7 | Trainer integration (replace substitute loader `export.load_annotations`); train on baseline vs routed annotations | a trainer |
 | B-8 | Secondary detector adapter (independent model) | T-1 |
