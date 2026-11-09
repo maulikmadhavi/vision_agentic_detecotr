@@ -35,7 +35,7 @@ The requirements and acceptance criteria are in [specification.md](specification
 
 | ID | Card | Why |
 |---|---|---|
-| T-1 | **Serve a real primary detector** behind the `svc-1.0` contract (self-hosted, e.g. Grounding DINO in its own container; or a normalizing adapter for a hosted API). `RemoteDetector` (F-35) is the client; CLI flag `--primary-url` exists (8da5fe0); no server or hosted adapter yet. Hosted APIs send images off-machine: check terms and data handling first; credentials by env reference. Needs the user's 30–50 trial images. | Unblocks real shadow runs, SAHI, the benchmark and rollout. |
+| T-1 | **Evaluate the Grounding DINO service on real images.** The server exists (F-36) and `--primary-url` works; what is missing is the user's 30–50 trial images, human labels, and choosing prompts/thresholds on them (it boxes something for every prompt: absent class 0.71, blank image 0.83 on synthetic tests). Hosted APIs remain unbuilt: they need a normalizing adapter, terms/data-handling check, env-var credentials. | Unblocks real shadow runs, SAHI, the benchmark and rollout. |
 | T-2 | **Build the human-checked sample** (class, domain, resolution, size, crowding, positives/negatives, low similarity); split calibration / development / frozen by source group; lock the frozen set. | Every Phase 5 card needs it. |
 | T-3 | **Independent review** (human or Codex) of `pipeline._candidates`, `_verify`, `_apply`, `policy.route`. | Same model family wrote and reviewed the code. |
 | T-4 | **Stage A gaps:** compression indicator; domain-distance when a reference distribution exists (`StageA.domain_distance` is never filled). | Spec Stage A list; domain-shift audit sampling (rule 7). |
@@ -120,6 +120,7 @@ The requirements and acceptance criteria are in [specification.md](specification
 | F-33 | P2: calibrator-missing class routes to `human_review` and is listed as suspected | 76455b3 |
 | F-34 | Environments managed with pixi (`default`, `clip` with CUDA 12.8 torch) | 2267644 |
 | F-35 | Services increment 1: `svc-1.0` wire contract + `RemoteDetector` (existing `Detector` protocol; one POST, hard timeout, no retry; failures raise → error queue/review; model revision and weights digest checked and bound into the run key; pixel cap before any call). 20 tests with mocked HTTP | 7bd7c2e |
+| F-36 | Grounding DINO detector service in `third_party_service/` (own pixi workspace, `svc-1.0`, one forward pass per class so no phrase mapping; weights pinned to HF revision a2bb814 + SHA-256, verified at start; thresholds in the revision string; server-measured `gpu_ms`). Measured on the RTX 5070: ~390 ms/image for 2 classes, 1.76 GiB peak, 9.6 of 12.2 GiB with LM Studio Qwen loaded. Live test behind marker `gdino`; service tests not in CI | e65ff6d |
 | D-8 | Work committed incrementally; author email rewritten to gmail (user's choice) | — |
 
 ## Acceptance tests (from the spec)
