@@ -2,7 +2,7 @@
 
 **Updated:** 2026-11-09 · **Owner:** user · **Implementer:** Claude · **Review log:** [reviewer_suggestion.md](reviewer_suggestion.md)
 
-**Status:** phases 0–4 done, Phase 5 started, Phase 6 not started. Routing is off by default (`routing_enabled: false`). `pixi run test`: 147 passed (re-run by the analysis agent); live `test-clip`, `test-lmstudio`, `test-gdino`, `test-wemm`: 1 passed each (reported by main_agent, synthetic images only). Environments: pixi only. Git: tags `v0.1-phase4-baseline` (208713e) and `v0.2-r3-blockers-fixed` (0435d99); `backup/pre-author-rewrite` holds the pre-rewrite history.
+**Status:** phases 0–4 done, Phase 5 started, Phase 6 not started. Routing is off by default (`routing_enabled: false`). `pixi run test`: 150 passed (re-run by the analysis agent); live `test-clip`, `test-lmstudio`, `test-gdino`, `test-wemm`: 1 passed each (reported by main_agent, synthetic images only). Environments: pixi only. Git: tags `v0.1-phase4-baseline` (208713e) and `v0.2-r3-blockers-fixed` (0435d99); `backup/pre-author-rewrite` holds the pre-rewrite history.
 
 The requirements and acceptance criteria are in [specification.md](specification.md); this board tracks their status only.
 
@@ -123,6 +123,7 @@ The requirements and acceptance criteria are in [specification.md](specification
 | F-35 | Services increment 1: `svc-1.0` wire contract + `RemoteDetector` (existing `Detector` protocol; one POST, hard timeout, no retry; failures raise → error queue/review; model revision and weights digest checked and bound into the run key; pixel cap before any call). 20 tests with mocked HTTP | 7bd7c2e |
 | F-36 | Grounding DINO detector service in `third_party_service/` (own pixi workspace, `svc-1.0`, one forward pass per class so no phrase mapping; weights pinned to HF revision a2bb814 + SHA-256, verified at start; thresholds in the revision string; server-measured `gpu_ms`). Measured on the RTX 5070: ~390 ms/image for 2 classes, 1.76 GiB peak, 9.6 of 12.2 GiB with LM Studio Qwen loaded. Live test behind marker `gdino`; service tests not in CI | e65ff6d |
 | F-37 | T-10 INC 1: `WeMMMCPRelevanceScorer` (was `RemoteRelevanceScorer`; old name is an alias) for the user's WeMM MCP server (`--wemm`, URL from `$VAD_WEMM_URL`, never in git): scale `wemm_text_cosine_v1`, max cosine over positive prompts, longest side ≤ 448 px, one retry on network errors only, errors never become a score of 0, meta checked per response. **Behavior change:** any scorer exception now leaves relevance `unavailable` and the image in review (it was lost to the error queue). 28 tests + live test behind marker `wemm` | 9eeef4c |
+| F-38 | `route_report` counts images whose relevance scorer failed (`relevance_scorer_failures`: count + error types); `vad-route shadow` prints a one-line stderr warning when the count is above zero (exit code stays 0). Also: rename commit f86bec0 (WeMM scorer name, clearer verification helper names; run keys unchanged by a golden test) | de1f3ad |
 | D-8 | Work committed incrementally; author email rewritten to gmail (user's choice) | — |
 
 ## Acceptance tests (from the spec)
@@ -196,7 +197,7 @@ There was no existing detector repository, so each interface is a neutral defaul
 
 ```bash
 pixi install                    # add `-e clip` for the CLIP scorer
-pixi run test                   # 147 tests, no network / GPU
+pixi run test                   # 150 tests, no network / GPU
 pixi run -e clip test-clip      # live CLIP (local weights)
 pixi run test-lmstudio          # live VLM (LM Studio)
 pixi run vad-route shadow --config configs/routing/example.yaml --images manifest.jsonl \
