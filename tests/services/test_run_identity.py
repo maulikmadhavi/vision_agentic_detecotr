@@ -38,3 +38,16 @@ def test_services_resolves_to_src_not_the_tests_package():
     assert Path(routing.__file__).parent.parent.name == "src"
     assert contracts.SERVICE_SCHEMA_VERSION == "svc-1.0"
     assert __name__ == "tests.services.test_run_identity"
+
+
+def test_service_contracts_import_no_routing_and_keep_the_strict_config():
+    # The server needs only services.*; contracts carries its own copy of the Strict base.
+    import subprocess
+    import sys
+
+    from routing.schemas import Strict as RoutingStrict
+    from services.contracts import Strict as ContractStrict
+
+    assert ContractStrict is not RoutingStrict and ContractStrict.model_config == RoutingStrict.model_config
+    code = "import sys, services.contracts; sys.exit(any(m.split('.')[0] == 'routing' for m in sys.modules))"
+    assert subprocess.run([sys.executable, "-c", code]).returncode == 0

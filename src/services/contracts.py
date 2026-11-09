@@ -9,11 +9,15 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field
-
-from routing.schemas import Strict
+from pydantic import BaseModel, ConfigDict, Field
 
 SERVICE_SCHEMA_VERSION = "svc-1.0"
+
+
+class Strict(BaseModel):
+    """Same config as ``routing.schemas.Strict`` (a test checks they match); kept here so servers need only services.*."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
 
 class DetectClass(Strict):
