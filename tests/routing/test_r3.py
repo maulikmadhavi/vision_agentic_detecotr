@@ -129,3 +129,26 @@ def test_r3_4_missing_class_with_calibrator_is_not_low_relevance(tmp_path):
     rec2 = RoutingPipeline(config(), ScriptedDetector({"a": []}), RouteStore(tmp_path / "r2.sqlite"),
                            relevance=complete, calibrator=_LowCalibrator()).process(_entry(tmp_path))
     assert rec2.stage_a.relevance_band == "low"  # complete evidence may still gate low
+
+
+# R3-5: a bare human "complete" cannot clear open findings ---------------------------------------
+
+
+def test_r3_5_human_complete_does_not_clear_open_findings(tmp_path):
+    from vad.routing.completeness import audit
+    from vad.routing.schemas import Budget, FinalCandidate, Quality, RouteDecision, StageA
+
+    cfg = config()
+    sa = StageA(per_class={}, relevance_status="unavailable", relevance_band="unknown",
+                quality=Quality(blur=0.1, exposure=0, min_side_px=500, low_resolution=False))
+    dec = RouteDecision(actions=("standard",), priority=0, reason_codes=(), policy_version="v", expected_budget=Budget())
+    open_cand = FinalCandidate(id="cand-1", class_id=CLASS_A, box_xyxy=(1, 1, 9, 9), status="needs_review",
+                               source_ids=("det-1",), canonical_source_id="det-1")
+
+    unmatched = audit([open_cand], sa, dec, [], cfg, human_outcome="complete")
+    assert unmatched.status == "needs_review" and unmatched.established_by == "human"
+    assert "human_complete_overridden_by_open_findings" in unmatched.reason_codes
+    failed = audit([], sa, dec, [], cfg, failure_reasons=("secondary_failed:RuntimeError",), human_outcome="complete")
+    assert failed.status != "complete"
+    clean = audit([], sa, dec, [], cfg, human_outcome="complete")
+    assert clean.status == "complete" and clean.reviewer_outcome == "complete"

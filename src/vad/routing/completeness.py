@@ -82,7 +82,13 @@ def audit(
     else:
         established = "none"
 
-    if human_outcome == "complete":
+    # A bare human "complete" may only close an image with no open evidence. It cannot clear
+    # unmatched candidates, unresolved/uncertain verifications or failed escalations: those
+    # need an explicit per-finding adjudication record (not implemented yet).
+    open_findings = unresolved or bool(unmatched) or bool(failure_reasons)
+    if human_outcome == "complete" and open_findings:
+        reasons.append("human_complete_overridden_by_open_findings")
+    if human_outcome == "complete" and not open_findings:
         status = "complete"
     elif unresolved:
         status = "unresolved"
