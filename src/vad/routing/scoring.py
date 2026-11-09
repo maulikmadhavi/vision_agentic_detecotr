@@ -58,17 +58,25 @@ def stage_a(
                       quality=quality, warnings=tuple(warnings))
 
     t = cfg.relevance
+    incomplete = bool(set(cfg.task.class_ids) - set(raw))
+
+    def no_low_if_incomplete(band: str) -> str:
+        # Incomplete evidence must never produce a low-relevance gate, calibrated or not:
+        # an unscored class could be the one that is present.
+        if incomplete and band == "low":
+            warnings.append("incomplete_relevance_low_band_raised_to_medium")
+            return "medium"
+        return band
+
     if calibrator is not None:
         probs, any_p = calibrator.calibrate(raw)
         per_class = {k: ClassRelevance(raw_similarity=v, relevance_probability=probs.get(k)) for k, v in raw.items()}
-        band = "high" if any_p >= t.prob_high else "low" if any_p < t.prob_low else "medium"
+        band = no_low_if_incomplete("high" if any_p >= t.prob_high else "low" if any_p < t.prob_low else "medium")
         return StageA(per_class=per_class, image_relevance_probability=any_p, relevance_status="calibrated",
                       relevance_band=band, quality=quality, warnings=tuple(warnings))
 
     top = max(raw.values())
-    band = "high" if top >= t.raw_high else "low" if top < t.raw_low else "medium"
-    if set(cfg.task.class_ids) - set(raw) and band == "low":
-        band = "medium"  # incomplete evidence must not produce a low-relevance gate
+    band = no_low_if_incomplete("high" if top >= t.raw_high else "low" if top < t.raw_low else "medium")
     per_class = {k: ClassRelevance(raw_similarity=v) for k, v in raw.items()}
     return StageA(per_class=per_class, relevance_status="uncalibrated", relevance_band=band,
                   quality=quality, warnings=tuple(warnings))

@@ -103,3 +103,29 @@ def test_r3_3_crash_after_vlm_answer_before_persist_never_resends(tmp_path):
     (c,) = rec.final_candidates
     assert c.status == "needs_review" and c.verification.reason_code == "vlm_interrupted"
     assert rec.completeness.status == "unresolved"
+
+
+# R3-4: incomplete calibrated relevance must not yield a low band --------------------------------
+
+
+class _LowCalibrator:
+    version = "cal@test"
+
+    def calibrate(self, raw):
+        return {k: 0.01 for k in raw}, 0.02  # confidently "nothing here" for the classes it saw
+
+
+def test_r3_4_missing_class_with_calibrator_is_not_low_relevance(tmp_path):
+    rel = ScriptedRelevance({"a": {CLASS_A: 0.05}})  # CLASS_B not scored at all
+    rec = RoutingPipeline(config(), ScriptedDetector({"a": []}), RouteStore(tmp_path / "r.sqlite"),
+                          relevance=rel, calibrator=_LowCalibrator()).process(_entry(tmp_path))
+    sa = rec.stage_a
+    assert sa.relevance_status == "calibrated" and sa.image_relevance_probability == 0.02
+    assert sa.relevance_band == "medium"
+    assert "incomplete_relevance_low_band_raised_to_medium" in sa.warnings
+    assert "low_relevance_zero_boxes" not in rec.route.reason_codes  # not treated as a likely negative
+
+    complete = ScriptedRelevance({"a": {CLASS_A: 0.05, CLASS_B: 0.05}})
+    rec2 = RoutingPipeline(config(), ScriptedDetector({"a": []}), RouteStore(tmp_path / "r2.sqlite"),
+                           relevance=complete, calibrator=_LowCalibrator()).process(_entry(tmp_path))
+    assert rec2.stage_a.relevance_band == "low"  # complete evidence may still gate low
