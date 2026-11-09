@@ -24,7 +24,7 @@ curl -fsSL https://pixi.sh/install.sh | sh
 
 ```bash
 pixi install            # default env: Python 3.13 + package (editable) + pytest
-pixi install -e clip    # adds open_clip + CUDA 12.8 torch for the CLIP scorer
+pixi install -e clip    # CLIP scorer env: not used for now (kept, opt-in via --clip-weights)
 pixi shell              # optional: activate the default env
 ```
 
@@ -40,7 +40,7 @@ pixi run vad-route export-schema --out schemas
 pixi run vad-route shadow --config configs/routing/example.yaml --images path/to/manifest.jsonl \
   --primary-predictions preds.jsonl --primary-version mymodel@sha \
   [--secondary-predictions sec.jsonl --secondary-version other@sha] \
-  [--relevance-scores rel.jsonl | --clip-weights open_clip_model.safetensors] [--vlm] --out runs/shadow1
+  [--relevance-scores rel.jsonl | --wemm] [--vlm] --out runs/shadow1
 
 # Legacy primary-only export (what runs when the flag is off)
 pixi run vad-route legacy --config ... --images ... --primary-predictions ... --primary-version ... --out runs/legacy
@@ -66,7 +66,9 @@ pixi run vad-route shadow --config configs/routing/example.yaml --images path\to
 
 Shadow output: `routes.sqlite` (resumable step cache, records, error queue), `route_trace.jsonl`, `annotations.json`, `report.json`. A shadow run holds an exclusive lock on its `--out` directory; a second concurrent run on the same directory exits with code 2.
 
-**Live relevance (CLIP).** `--clip-weights` scores Stage A with a local open_clip checkpoint (`pixi install -e clip`, then `pixi run -e clip vad-route shadow ...`). Its score is a prompt-contrast softmax in [0, 1] (`clip_prompt_softmax_v1`), not a cosine, so the config must set `relevance.raw_scale: clip_prompt_softmax_v1` and choose bands for that scale; otherwise the run is refused. See [docs/project_board.md](docs/project_board.md), "How it works and why".
+**Relevance (WeMM).** `--wemm` scores Stage A on the WeMM embedding server. Its endpoint is read only from `$VAD_WEMM_URL` (never put it in config or git). The score is the max text–image cosine over each class's positive prompts (scale `wemm_text_cosine_v1`; not a probability, not comparable with CLIP), so the config must set `relevance.raw_scale: wemm_text_cosine_v1` with bands chosen for that scale, or the run is refused. Images are downscaled so the longest side is at most 448 px (`--wemm-max-side`) before sending. If the server fails for an image, its relevance is `unavailable` (never a score of 0), it goes to review, and the run prints a stderr warning with the failure count. The model is recorded as `@unverified` until you pass `--wemm-build <sha>`, which is then checked on every response.
+
+**Relevance (CLIP): not used for now (kept, opt-in via `--clip-weights`).** Local open_clip scoring (`pixi install -e clip`, then `pixi run -e clip vad-route shadow ... --clip-weights <file>`), scale `clip_prompt_softmax_v1`. See [docs/project_board.md](docs/project_board.md), "How it works and why".
 
 `--vlm` uses LM Studio at `http://localhost:1234/v1` with `qwen3-vl-4b-instruct`. Change the model with `vlm.model` in the config.
 
@@ -75,25 +77,28 @@ Shadow output: `routes.sqlite` (resumable step cache, records, error queue), `ro
 ```bash
 pixi run test                 # unit + acceptance (no network, no GPU)
 pixi run test-lmstudio        # live check against local LM Studio (-rs: lists skips)
-pixi run -e clip test-clip    # live CLIP scorer (-rs: lists skips)
-pixi run -e clip gpu-check    # torch version, CUDA available, device names
+pixi run test-wemm            # live WeMM scorer, synthetic image (needs $VAD_WEMM_URL; skips without it)
+pixi run -e clip test-clip    # live CLIP scorer: not used for now (kept)
+pixi run -e clip gpu-check    # torch version, CUDA available, device names (clip env)
 ```
 
 ## Live prerequisites (not in the lockfile)
 
-The live tests and `--clip-weights` / `--vlm` need assets that pixi does not install:
+The live tests and `--wemm` / `--vlm` (and the unused `--clip-weights`) need assets that pixi does not install:
 
 | Asset | Expected | How it is found |
 |---|---|---|
-| CLIP checkpoint | Hugging Face `timm/vit_base_patch16_clip_224.openai`, file `open_clip_model.safetensors` (598,516,980 bytes, SHA-256 `4b8699299b1e8997753c64b052ba32031449d5d853f55a039148560ee02b820f`) | `VAD_CLIP_WEIGHTS` if set, else the Hugging Face cache. Never downloaded by this repo. |
+| WeMM embedding server | MCP streamable-http server reporting `meta.backend=wemm`, `meta.model=tencent/WeMM-Embedding-4B`, `meta.dim=2560` | `$VAD_WEMM_URL` (set it in your shell or an untracked, gitignored file; never commit the address) |
+| CLIP checkpoint (not used for now) | Hugging Face `timm/vit_base_patch16_clip_224.openai`, file `open_clip_model.safetensors` (598,516,980 bytes, SHA-256 `4b8699299b1e8997753c64b052ba32031449d5d853f55a039148560ee02b820f`) | `VAD_CLIP_WEIGHTS` if set, else the Hugging Face cache. Never downloaded by this repo. |
 | LM Studio | OpenAI-compatible server at `http://localhost:1234/v1` with model ID `qwen3-vl-4b-instruct` loaded | `vlm.base_url` / `vlm.model` in the config |
 | GPU (optional) | CUDA-capable NVIDIA GPU for the `clip` env (CUDA 12.8 torch) | `pixi run -e clip gpu-check` |
 
 ```powershell
-$env:VAD_CLIP_WEIGHTS = "C:\path\to\open_clip_model.safetensors"   # PowerShell
+$env:VAD_WEMM_URL = "<your WeMM MCP endpoint>"                       # PowerShell
+$env:VAD_CLIP_WEIGHTS = "C:\path\to\open_clip_model.safetensors"   # CLIP, not used for now
 ```
 
-**Recording live results.** `test-clip` **skips** (it does not fail) when no weights are found, so a zero exit code alone does not prove CLIP ran. Record the passed and skipped counts that pytest prints (the tasks pass `-rs`, so the skip reason is listed), plus the pixi environment. `test-lmstudio` fails if the server or model is unavailable.
+**Recording live results.** `test-wemm` skips without `$VAD_WEMM_URL`, and `test-clip` **skips** (it does not fail) when no weights are found, so a zero exit code alone does not prove the scorer ran. Record the passed and skipped counts that pytest prints (the tasks pass `-rs`, so the skip reason is listed), plus the pixi environment. `test-lmstudio` fails if the server or model is unavailable.
 
 ## Layout
 

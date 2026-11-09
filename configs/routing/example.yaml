@@ -14,7 +14,7 @@ task:
       positive_prompts: ["a cracked rubber seal"]
       negative_prompts: ["an intact rubber seal"]
 relevance:
-  raw_scale: unspecified   # set to clip_prompt_softmax_v1 (and re-choose bands) to use --clip-weights
+  raw_scale: unspecified   # set to wemm_text_cosine_v1 (and choose bands on that scale) to use --wemm
   raw_high: 0.5     # raw-similarity bands: only valid on the scorer's own scale
   raw_low: 0.3
   prob_high: 0.7
