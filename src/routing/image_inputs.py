@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,6 +32,15 @@ def load_manifest(path: str | Path) -> list[ManifestEntry]:
     base = p.parent
     return [ManifestEntry(str((base / r["uri"]) if not Path(r["uri"]).is_absolute() else r["uri"]),
                           r.get("image_id"), r.get("group_id")) for r in rows]
+
+
+class RepeatedImageError(ValueError):
+    """An image appears more than once in one run."""
+
+
+def repeated_ids(ids: Iterable[str]) -> list[str]:
+    """The ids that occur more than once, sorted (one run holds each image once)."""
+    return sorted(i for i, n in Counter(ids).items() if n > 1)
 
 
 def image_id(entry: ManifestEntry, data: bytes) -> str:

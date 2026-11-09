@@ -26,6 +26,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .image_inputs import repeated_ids
 from .matching import iou
 from .schemas import TaskSpec
 
@@ -234,7 +235,7 @@ class ImageResult:
 
 def image_results(records: Sequence) -> dict[str, ImageResult]:
     """Reduce RouteRecords to :class:`ImageResult` by image id; a repeated image id is refused, not resolved."""
-    if repeated := sorted(i for i, n in Counter(r.image.id for r in records).items() if n > 1):
+    if repeated := repeated_ids(r.image.id for r in records):
         raise LabelError(f"repeated image ids in the trace {repeated[:10]}; evaluation needs one result per image "
                          "per run (rebuild a concatenated or retried trace)")
     return {r.image.id: ImageResult(

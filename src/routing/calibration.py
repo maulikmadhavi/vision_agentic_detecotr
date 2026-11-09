@@ -27,7 +27,6 @@ from __future__ import annotations
 import hashlib
 import math
 import re
-from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +35,7 @@ import numpy as np
 from pydantic import ValidationError
 
 from .evaluation import IsolationError, assert_split_allows, check_image_content
+from .image_inputs import repeated_ids
 from .metrics import load_ground_truth
 from .sample import label_digest
 from .schemas import RelevanceCalibratorArtifact, RouteRecord, TaskSpec, canonical_json
@@ -97,7 +97,7 @@ def _fit_counted(name: str, data: list[tuple[float, bool]], min_each: int) -> di
 
 def _refuse_repeats(image_ids: Sequence[str]) -> None:
     """One observation per image: repeated rows would reweight the fit and count towards MIN_EACH."""
-    if repeated := sorted(i for i, n in Counter(image_ids).items() if n > 1):
+    if repeated := repeated_ids(image_ids):
         raise CalibrationError(f"repeated image ids {repeated[:10]}; the fit needs one observation per image "
                                "(rebuild a concatenated or retried trace)")
 

@@ -23,7 +23,7 @@ from .evaluation import (
     CONTENT_FIELDS, IsolationError, check_image_content, load_frozen, lock_frozen_set, route_report,
 )
 from .export import export_legacy, export_reviewed, export_routed
-from .image_inputs import ManifestEntry, image_id, load_image, load_manifest
+from .image_inputs import ManifestEntry, RepeatedImageError, image_id, load_image, load_manifest, repeated_ids
 from .interfaces import Detector, RelevanceScorer
 from .metrics import LabelError, evaluate, evidence_status, image_results, load_ground_truth
 from .pipeline import RoutingPipeline
@@ -410,18 +410,23 @@ def _run_shadow(parser: argparse.ArgumentParser, args: argparse.Namespace, cfg: 
     if args.vlm:
         overrides["vlm"] = cfg.vlm.model_copy(update={"enabled": True})
     cfg = cfg.model_copy(update=overrides)
+    ids = []  # the ids the pipeline will record, checked before anything is created or processed
+    for entry in entries:
+        try:
+            ids.append(image_id(entry, b"" if entry.image_id else Path(entry.uri).read_bytes()))
+        except OSError:
+            ids.append(entry.uri)  # unreadable and unnamed: its uri stands in for the id
+    if repeated := repeated_ids(ids):
+        files = {i: sorted({e.uri for e, j in zip(entries, ids) if j == i}) for i in repeated}
+        conflicts = {i: f for i, f in files.items() if len(f) > 1}
+        parser.error(f"repeated image ids in --images {repeated[:10]}; a run holds each image once"
+                     + (f"; different files share an id: {conflicts}" if conflicts else ""))
     splits = None
     if args.split_manifest:
         manifest = json.loads(Path(args.split_manifest).read_text(encoding="utf-8"))
         if manifest.get("version") not in ("split-v1", "split-v2"):
             parser.error("--split-manifest must be a split manifest from `vad-route sample split`")
         splits = {i: img["split"] for i, img in manifest["images"].items()}
-        ids = []
-        for entry in entries:
-            try:
-                ids.append(image_id(entry, b"" if entry.image_id else Path(entry.uri).read_bytes()))
-            except OSError:
-                ids.append(entry.uri)  # unreadable and unnamed: cannot be matched to the split
         if missing := sorted(i for i in ids if i not in splits):
             parser.error(f"images not in --split-manifest: {missing[:5]}")
     secondary = (PrecomputedDetector(args.secondary_predictions, args.secondary_version)
@@ -453,6 +458,8 @@ def _run_shadow(parser: argparse.ArgumentParser, args: argparse.Namespace, cfg: 
             pipe = RoutingPipeline(cfg, primary, store, secondary=secondary, relevance=relevance,
                                    calibrator=calibrator, vlm=vlm)
             report = _write_shadow_outputs(pipe.run(entries), cfg.task, out, splits)
+    except RepeatedImageError as e:
+        parser.error(str(e))
     except StoreLockedError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -468,8 +475,12 @@ def _write_shadow_outputs(results: list[RouteRecord | ErrorRecord], task: TaskSp
     """Write annotations, trace and report for THIS run's results only.
 
     A reused --out store may hold records from earlier runs (other manifests, tasks or
-    configs); those must not leak into the exports.
+    configs); those must not leak into the exports. Each image (RouteRecord.image.id, or an
+    ErrorRecord's record_id) must appear once; otherwise nothing is written.
     """
+    keys = [r.image.id if isinstance(r, RouteRecord) else r.record_id for r in results]
+    if repeated := repeated_ids(keys):
+        raise RepeatedImageError(f"repeated image ids in the run's results {repeated[:10]}; nothing was written")
     records = sorted((result for result in results if isinstance(result, RouteRecord)),
                      key=lambda record: record.image.id)
     errors = [result for result in results if isinstance(result, ErrorRecord)]
