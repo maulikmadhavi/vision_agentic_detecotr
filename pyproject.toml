@@ -35,8 +35,9 @@ markers = [
     "lmstudio: requires a running LM Studio server with a vision model",
     "clip: requires open_clip + torch and local CLIP weights (VAD_CLIP_WEIGHTS or the HF cache)",
     "gdino: requires the local Grounding DINO server (third_party_service/grounding_dino)",
+    "wemm: requires the WeMM embedding server at $VAD_WEMM_URL",
 ]
-addopts = "-m 'not lmstudio and not clip and not gdino'"
+addopts = "-m 'not lmstudio and not clip and not gdino and not wemm'"
 
 # --------------------------------------------------------------------------- pixi
 # Environment manager for this repo (no venv/uv/conda). `pixi run test`, `pixi run -e clip test-clip`.
@@ -62,6 +63,7 @@ clip = { features = ["dev", "clip"], solve-group = "clip" }
 test = "pytest"
 test-lmstudio = "pytest -m lmstudio -rs"
 test-gdino = "pytest -m gdino -rs"
+test-wemm = "pytest -m wemm -rs"
 export-schema = "vad-route export-schema --out schemas"
 
 [tool.pixi.feature.clip.tasks]

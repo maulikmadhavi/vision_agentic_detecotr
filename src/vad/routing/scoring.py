@@ -46,10 +46,14 @@ def stage_a(
     raw: dict[str, float] = {}
     if scorer is not None:
         prompts = {c.class_id: (c.positive_prompts, c.negative_prompts) for c in cfg.task.classes}
-        raw = {k: v for k, v in scorer.score(image, ref.id, prompts).items() if k in cfg.task.class_ids}
-        missing = set(cfg.task.class_ids) - set(raw)
-        if missing:
-            warnings.append(f"relevance_missing_classes:{','.join(sorted(missing))}")
+        try:
+            raw = {k: v for k, v in scorer.score(image, ref.id, prompts).items() if k in cfg.task.class_ids}
+        except Exception as e:  # a failed scorer is unknown evidence (-> "unavailable"), never a score of 0
+            warnings.append(f"relevance_scorer_failed:{type(e).__name__}")
+        else:
+            missing = set(cfg.task.class_ids) - set(raw)
+            if missing:
+                warnings.append(f"relevance_missing_classes:{','.join(sorted(missing))}")
     if quality.low_resolution:
         warnings.append("low_resolution")
 

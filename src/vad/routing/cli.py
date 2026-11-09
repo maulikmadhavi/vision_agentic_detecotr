@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from .adapters import LMStudioVLM, PrecomputedDetector, PrecomputedRelevance
 from .evaluation import route_report
 from .export import export_legacy, export_routed
 from .pipeline import RouteStore, RoutingPipeline, StoreLockedError, job_lock, load_image, load_manifest
-from .remote_adapters import RemoteDetector
+from .remote_adapters import WEMM_TEXT_SCALE, RemoteDetector, RemoteRelevanceScorer
 from .schemas import ErrorRecord, RouteRecord, export_json_schemas
 from .task_config import load_config
 
@@ -52,6 +53,12 @@ def _parser() -> argparse.ArgumentParser:
             rel.add_argument("--relevance-scores")
             rel.add_argument("--clip-weights", help="local open_clip weights file for live Stage A relevance "
                                                     "(needs the [clip] extra and relevance.raw_scale: clip_prompt_softmax_v1)")
+            rel.add_argument("--wemm", action="store_true", help="Stage A relevance from the WeMM embedding server at "
+                                                                 "$VAD_WEMM_URL (needs relevance.raw_scale: wemm_text_cosine_v1)")
+            p.add_argument("--wemm-model", default="tencent/WeMM-Embedding-4B", help="expected meta.model (verified)")
+            p.add_argument("--wemm-dim", type=int, default=2560, help="expected meta.dim (verified)")
+            p.add_argument("--wemm-build", help="expected meta.build; without it the version is recorded as unverified")
+            p.add_argument("--wemm-max-side", type=int, default=448, help="downscale longest image side before sending")
             p.add_argument("--clip-arch", default="ViT-B-16-quickgelu", help="open_clip architecture for --clip-weights")
             p.add_argument("--relevance-version", default="precomputed", help="scorer identifier only (not verified); the file's SHA-256 is bound into the run key separately")
             p.add_argument("--vlm", action="store_true", help="enable LM Studio verification (overrides config)")
@@ -113,6 +120,15 @@ def main(argv: list[str] | None = None) -> int:
         if cfg.relevance.raw_scale != SCORE_SCALE:
             parser.error(f"--clip-weights needs relevance.raw_scale: {SCORE_SCALE} (with bands chosen for that scale)")
         relevance = OpenClipRelevance(args.clip_weights, args.clip_arch)
+    if args.wemm:
+        url = os.environ.get("VAD_WEMM_URL")
+        if not url:
+            parser.error("--wemm reads the server endpoint from $VAD_WEMM_URL, which is not set")
+        if cfg.relevance.raw_scale != WEMM_TEXT_SCALE:
+            parser.error(f"--wemm needs relevance.raw_scale: {WEMM_TEXT_SCALE} "
+                         "(with bands chosen for that scale)")
+        relevance = RemoteRelevanceScorer(url=url, model=args.wemm_model, dim=args.wemm_dim, build=args.wemm_build,
+                                          max_side=args.wemm_max_side)
     vlm = LMStudioVLM(cfg.vlm.base_url, cfg.vlm.model, cfg.vlm.timeout_s, cfg.vlm.max_tokens,
                       cfg.vlm.crop_padding) if cfg.vlm.enabled else None
     try:
