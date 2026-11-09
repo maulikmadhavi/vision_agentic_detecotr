@@ -72,6 +72,7 @@ class RoutingPipeline:
         self.vlm = vlm if cfg.vlm.enabled else None
         self.caps = Capabilities(secondary=secondary is not None, sahi=self.sahi_detector is not None,
                                  vlm=self.vlm is not None)
+        slicer = self.sahi_detector if self.sahi_detector is not primary else None  # dedicated slicer only
         self.run_info = RunInfo(
             config_hash=cfg.config_hash(), policy_version=cfg.policy_version,
             primary_model=primary.model_version,
@@ -82,6 +83,8 @@ class RoutingPipeline:
             primary_artifact_digest=getattr(primary, "artifact_digest", None),
             secondary_artifact_digest=getattr(secondary, "artifact_digest", None),
             relevance_artifact_digest=getattr(relevance, "artifact_digest", None),
+            sahi_model=slicer.model_version if slicer else None,
+            sahi_artifact_digest=getattr(slicer, "artifact_digest", None),
         )
 
     # -- legacy path (feature flag off) -------------------------------------------------
@@ -94,7 +97,11 @@ class RoutingPipeline:
     # -- routed path ----------------------------------------------------------------------
 
     def record_key(self, ref: ImageRef) -> str:
-        return stable_id("rec", [ref.sha256, ref.id, self.run_info.model_dump(mode="json")])
+        run = self.run_info.model_dump(mode="json")
+        for name in ("sahi_model", "sahi_artifact_digest"):  # added later: unset values keep older keys valid
+            if run[name] is None:
+                del run[name]
+        return stable_id("rec", [ref.sha256, ref.id, run])
 
     def run(self, entries: Iterable[ManifestEntry]) -> list[RouteRecord | ErrorRecord]:
         return [self.process(e) for e in entries]

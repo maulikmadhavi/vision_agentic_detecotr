@@ -278,6 +278,11 @@ class RunInfo(Strict):
     primary_artifact_digest: str | None = None
     secondary_artifact_digest: str | None = None
     relevance_artifact_digest: str | None = None
+    # A dedicated slicing detector (one that is not the primary). None when slicing is off or
+    # the primary slices, since the primary's identity already covers that. Unset values are
+    # left out of the record key, so runs without a dedicated slicer keep their keys.
+    sahi_model: str | None = None
+    sahi_artifact_digest: str | None = None
 
 
 class Trace(Strict):

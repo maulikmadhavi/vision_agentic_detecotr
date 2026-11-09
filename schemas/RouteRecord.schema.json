@@ -796,6 +796,30 @@
           "default": null,
           "title": "Relevance Scorer"
         },
+        "sahi_artifact_digest": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sahi Artifact Digest"
+        },
+        "sahi_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sahi Model"
+        },
         "secondary_artifact_digest": {
           "anyOf": [
             {
