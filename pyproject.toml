@@ -14,8 +14,8 @@ dependencies = [
 [project.optional-dependencies]
 # Slicing is native (src/vad/routing/slicing.py); nothing imports the SAHI package, so
 # there is no SAHI extra to pin. Add one with an exact pin if a SAHI bridge is written.
-# Live Stage A relevance (embedder.OpenClipRelevance). Install torch from the CUDA index
-# for GPU use, e.g. torch 2.11.0+cu128 as in the dev venv.
+# Live Stage A relevance (embedder.OpenClipRelevance). The pixi `clip` environment pulls
+# torch from the CUDA 12.8 index (see [tool.pixi.feature.clip]).
 clip = ["open_clip_torch>=4.2,<5", "torch>=2.11,<3"]
 dev = ["pytest>=8"]
 
@@ -36,3 +36,31 @@ markers = [
     "clip: requires open_clip + torch and local CLIP weights (VAD_CLIP_WEIGHTS or the HF cache)",
 ]
 addopts = "-m 'not lmstudio and not clip'"
+
+# --------------------------------------------------------------------------- pixi
+# Environment manager for this repo (no venv/uv/conda). `pixi run test`, `pixi run -e clip test-clip`.
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["win-64", "linux-64"]
+
+[tool.pixi.dependencies]
+python = "3.13.*"
+
+[tool.pixi.pypi-dependencies]
+vad = { path = ".", editable = true }
+
+[tool.pixi.feature.clip.pypi-dependencies]
+torch = { version = ">=2.11,<3", index = "https://download.pytorch.org/whl/cu128" }
+
+[tool.pixi.environments]
+default = { features = ["dev"], solve-group = "default" }
+clip = { features = ["dev", "clip"], solve-group = "clip" }
+
+[tool.pixi.tasks]
+test = "pytest"
+test-lmstudio = "pytest -m lmstudio"
+export-schema = "vad-route export-schema --out schemas"
+
+[tool.pixi.feature.clip.tasks]
+test-clip = "pytest -m clip"

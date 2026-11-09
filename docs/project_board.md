@@ -124,11 +124,11 @@ Qualifications still open on earlier rows (earlier review): F-12 is now covered 
 ## How to run
 
 ```bash
-uv venv -p 3.13 && uv pip install -e ".[dev]"            # add ",clip" for the CLIP scorer
-.venv/Scripts/python -m pytest                            # 92 tests, no network / GPU
-.venv/Scripts/python -m pytest -m clip                    # live CLIP (local weights)
-.venv/Scripts/python -m pytest -m lmstudio                # live VLM (LM Studio)
-vad-route shadow --config configs/routing/example.yaml --images manifest.jsonl \
+pixi install                                              # pixi only; add `-e clip` for the CLIP scorer
+pixi run test                                             # 92 tests, no network / GPU
+pixi run -e clip test-clip                                # live CLIP (local weights)
+pixi run test-lmstudio                                    # live VLM (LM Studio)
+pixi run vad-route shadow --config configs/routing/example.yaml --images manifest.jsonl \
   --primary-predictions preds.jsonl --primary-version mymodel@sha --out runs/shadow1
 ```
 
@@ -289,12 +289,12 @@ The plan assumes an existing detector repository. None exists; this workspace he
 | Relevance (text–image) | **Yes**: cached `timm/vit_base_patch16_clip_224.openai` + open_clip | `PrecomputedRelevance` and `OpenClipRelevance` (prompt-contrast softmax, scale `clip_prompt_softmax_v1`, weights SHA-256 as `artifact_digest`). With no scorer, relevance is `unavailable` and zero-box images go to review. | `adapters.py`, `embedder.py`, `scoring.stage_a` |
 | VLM | **Yes**: LM Studio `qwen3-vl-4b-instruct` at `localhost:1234` | `LMStudioVLM`: one attempt, hard timeout, `json_schema` response format, strict parse; any failure becomes `uncertain`. About 21 s on first call (model load), 1–3 s after. | `adapters.py` |
 
-**Hardware:** RTX 5070 (12 GB), Python 3.13. The dev venv has torch 2.11.0+cu128 and open_clip 4.2.1, used only by the optional CLIP scorer. SAHI and ultralytics are not installed.
+**Hardware:** RTX 5070 (12 GB), Python 3.13. The pixi `clip` environment adds CUDA 12.8 torch and open_clip, used only by the optional CLIP scorer. SAHI and ultralytics are not installed.
 
 **Baseline fixture.** `tests/routing/helpers.make_fixture(dir)` writes 3 images plus 1 corrupt file, a manifest, primary predictions and relevance scores. The class IDs `blue_widget_x9` and `zz-custom.class_7` are deliberately non-COCO. Regenerate with:
 
 ```bash
-.venv/Scripts/python -c "from pathlib import Path; from tests.routing.helpers import make_fixture; make_fixture(Path('runs/fixture'))"
+pixi run python -c "from pathlib import Path; from tests.routing.helpers import make_fixture; make_fixture(Path('runs/fixture'))"
 ```
 
 ### Integration assumptions

@@ -7,9 +7,15 @@ Adaptive image-level routing for custom object detection. Phases 0–4 are imple
 
 ## Setup
 
+Environments are managed with [pixi](https://pixi.sh) only (config in `pyproject.toml`, lock in `pixi.lock`).
+
 ```bash
-uv venv -p 3.13 && uv pip install -e ".[dev]"
+pixi install            # default env: Python 3.13 + package (editable) + pytest
+pixi install -e clip    # adds open_clip + CUDA 12.8 torch for the CLIP scorer
+pixi shell              # optional: activate the default env
 ```
+
+Run any command inside an environment with `pixi run <cmd>` (e.g. `pixi run vad-route --help`).
 
 ## Commands
 
@@ -33,16 +39,16 @@ vad-route legacy --config ... --images ... --primary-predictions ... --primary-v
 
 Shadow output: `routes.sqlite` (resumable step cache, records, error queue), `route_trace.jsonl`, `annotations.json`, `report.json`. A shadow run holds an exclusive lock on its `--out` directory; a second concurrent run on the same directory exits with code 2.
 
-**Live relevance (CLIP).** `--clip-weights` scores Stage A with a local open_clip checkpoint (`uv pip install -e ".[clip]"`). Its score is a prompt-contrast softmax in [0, 1] (`clip_prompt_softmax_v1`), not a cosine, so the config must set `relevance.raw_scale: clip_prompt_softmax_v1` and choose bands for that scale; otherwise the run is refused. See [docs/project_board.md](docs/project_board.md), Part D (CLIP scorer).
+**Live relevance (CLIP).** `--clip-weights` scores Stage A with a local open_clip checkpoint (`pixi install -e clip`, then `pixi run -e clip vad-route shadow ...`). Its score is a prompt-contrast softmax in [0, 1] (`clip_prompt_softmax_v1`), not a cosine, so the config must set `relevance.raw_scale: clip_prompt_softmax_v1` and choose bands for that scale; otherwise the run is refused. See [docs/project_board.md](docs/project_board.md), Part D (CLIP scorer).
 
 `--vlm` uses LM Studio at `http://localhost:1234/v1` with `qwen3-vl-4b-instruct`. Change the model with `vlm.model` in the config.
 
 ## Tests
 
 ```bash
-.venv/Scripts/python -m pytest            # unit + acceptance (no network)
-.venv/Scripts/python -m pytest -m lmstudio  # live check against local LM Studio
-.venv/Scripts/python -m pytest -m clip      # live CLIP scorer (local weights, GPU if available)
+pixi run test                 # unit + acceptance (no network, no GPU)
+pixi run test-lmstudio        # live check against local LM Studio
+pixi run -e clip test-clip    # live CLIP scorer (local weights, GPU if available)
 ```
 
 ## Layout
