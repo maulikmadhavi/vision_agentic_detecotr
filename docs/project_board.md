@@ -2,7 +2,7 @@
 
 **Updated:** 2026-11-09 · **Owner:** user · **Implementer:** Claude · **Review log:** [reviewer_suggestion.md](reviewer_suggestion.md)
 
-**Status:** phases 0–4 done, Phase 5 started, Phase 6 not started. Routing is off by default (`routing_enabled: false`). `pixi run test`: 168 passed, 0 skipped, 1 warning (starlette testclient deprecation; harmless) (re-run by the analysis agent); the Grounding DINO server tests now run in the default suite (fastapi in the dev extra); live `test-clip`, `test-lmstudio`, `test-gdino`, `test-wemm`: 1 passed each, and `test-e2e` (all three services at once): 4 passed (reported by main_agent, synthetic images only; I re-ran `test-gdino` only, the WeMM URL is not in my environment). Environments: pixi only. Git: tags `v0.1-phase4-baseline` (208713e) and `v0.2-r3-blockers-fixed` (0435d99); `backup/pre-author-rewrite` holds the pre-rewrite history.
+**Status:** phases 0–4 done, Phase 5 started, Phase 6 not started. Routing is off by default (`routing_enabled: false`). `pixi run test`: 184 passed, 0 skipped, 1 warning (starlette testclient deprecation; harmless) (re-run by the analysis agent); the Grounding DINO server tests now run in the default suite (fastapi in the dev extra); live `test-vlm`, `test-gdino`, `test-wemm`: 1 passed each, `test-e2e` (all three services at once): 4 passed, and `test-live-required` (fails instead of skipping): 7 passed (reported by main_agent, synthetic images only; I re-ran `test-gdino` only, the WeMM URL is not in my environment). Environments: pixi only (the `clip` environment is gone). Git: tags `v0.1-phase4-baseline` (208713e) and `v0.2-r3-blockers-fixed` (0435d99); `backup/pre-author-rewrite` holds the pre-rewrite history.
 
 The requirements and acceptance criteria are in [specification.md](specification.md); this board tracks their status only.
 
@@ -26,7 +26,7 @@ The requirements and acceptance criteria are in [specification.md](specification
 | D-2 | `policy.moderate_without_secondary`: `vlm_then_human` or `human` | `vlm_then_human` | Keep. |
 | D-3 | `policy.cross_class_always_review` | `true` | Keep until a secondary detector exists. |
 | D-4 | `vlm.absent_rejects`: let a VLM "absent" reject a box | `false` | Set a target for `absent_precision_wilson_lower95` before measuring (B-6). |
-| D-5 | Relevance bands on the `wemm_text_cosine_v1` scale (CLIP is parked, not used for now) | none (`raw_scale: unspecified`) | Choose on the calibration split, or fit a calibrator (B-2, B-3). |
+| D-5 | Relevance bands on the `wemm_text_cosine_v1` scale (CLIP was removed) | none (`raw_scale: unspecified`) | Choose on the calibration split, or fit a calibrator (B-2, B-3). |
 | D-6 | GPU budget counts only adapter-measured device time | measured only | Confirm. |
 | D-7 | VLM model | `qwen3-vl-4b-instruct` (8B not loaded) | Load 8B and compare on real crops (B-6). |
 | D-9 | Delete `backup/pre-author-rewrite` and `refs/original/*` (old NCS-email history), and the unused `.venv/` | kept | Delete once you're sure. |
@@ -132,6 +132,10 @@ The requirements and acceptance criteria are in [specification.md](specification
 | F-38 | `route_report` counts images whose relevance scorer failed (`relevance_scorer_failures`: count + error types); `vad-route shadow` prints a one-line stderr warning when the count is above zero (exit code stays 0). Also: rename commit f86bec0 (WeMM scorer name, clearer verification helper names; run keys unchanged by a golden test) | de1f3ad |
 | F-39 | Restructure (user's choice): packages `routing` and `services` under `src/` (no `vad` level, no compatibility shims; console script still `vad-route`); `adapters`/`pipeline`/`embedder` split by responsibility (`interfaces`, `detection_mapping`, `verification_results`, `store`, `image_inputs`, `services/{contracts,http_detector,wemm_mcp,replay,lmstudio,open_clip,runtime}`); `LMStudioVerifier`, `OpenClipRelevanceScorer`; Grounding DINO env stored outside `src/` (pixi detached environments; one config command per fresh clone, see its README). Golden run keys unchanged by tests | 4addae9, 7151324 |
 | F-40 | Live three-service test (`pixi run test-e2e`, marker `e2e`, excluded from the default suite): one shadow run with `--primary-url`, `--wemm`, `--vlm` on 5 synthetic images, plus an outage test per service. Live tests now skip with a reason when a service is down (`tests/services/live.py`; `test-lmstudio` used to fail). Run identity recorded all three: Grounding DINO `a2bb814dd30d+bt0.35+tt0.25` with weights digest checked, WeMM `…/d2560@unverified+max448`, VLM `lmstudio:qwen3-vl-4b-instruct`. 0 scorer failures, 11 real VLM verdicts, VLM authored no boxes, only accepted boxes exported. Outages: detector down → image in `report.errors`; WeMM down → relevance unavailable, review; LM Studio down → all uncertain, review | dbc1857 |
+| F-41 | C1: OpenCLIP removed (scorer, live test, CLI flags `--clip-*` now fail as unrecognized, `clip` extra/marker/environment/tasks; locks regenerated, default environment packages unchanged). Orphaned `.pixi/envs/clip` and old `.venv/` deleted on the user's instruction | d4738fa |
+| F-42 | C2: `OpenAICompatibleVerifier` (was `LMStudioVerifier`): base URL and model explicit, optional bearer token read from an environment variable named by `vlm.api_key_env` (outside `config_hash`, never in repr/traces/identity). Identity still `lmstudio:{model}` (D-11). Golden keys unchanged | d099fbb |
+| F-43 | C3: packages flattened to `routing`, `services_embedding`, `service_detector_vlm`, `service_detector_gdino` (replay moved to `routing/replay.py`; `src/services` gone; one wheel). Golden keys unchanged. Older rows below name the old paths: history | 4665884 |
+| F-44 | C4: live tests renamed to VLM names; readiness is a real synthetic inference (reachable but failing = FAIL); unreachable = skip, or FAIL with `VAD_LIVE_REQUIRED=1` / `pixi run test-live-required`; https probes port 443. Config from `VAD_GDINO_*`, `VAD_VLM_*`, `VAD_WEMM_URL`. Spec link targets updated. 184 tests | cfac81c |
 | D-8 | Work committed incrementally; author email rewritten to gmail (user's choice) | — |
 
 ## Acceptance tests (from the spec)
@@ -182,7 +186,7 @@ The requirements and acceptance criteria are in [specification.md](specification
 - **Policy knobs** (`policy:`; defaults = route-v1): `unknown_relevance_as`, `moderate_without_secondary`, `cross_class_always_review`. Poor-quality cut-offs: `quality.poor_blur` / `poor_exposure`.
 - **Job lock:** `vad-route shadow` holds an OS byte-range lock on `<out>/.vad-route.lock`; a second run exits with code 2. No stale-lock cleanup needed; PID probing is unsafe on Windows (`os.kill(pid, 0)` terminates).
 - **GPU cap:** enforced only on adapter-measured device time; the elapsed cap covers wall time.
-- **CLIP scorer:** local checkpoint, never downloads. Score `clip_prompt_softmax_v1` in [0, 1], uncalibrated. Raw cosines sit around 0.22–0.34, so a scorer declaring a scale is refused unless `relevance.raw_scale` matches. The guard covers only the live scorer, not replayed JSONL. About 9 ms GPU per 320×240 image.
+- **CLIP scorer (removed in F-41; kept as history):** local checkpoint, never downloads. Score `clip_prompt_softmax_v1` in [0, 1], uncalibrated. Raw cosines sit around 0.22–0.34, so a scorer declaring a scale is refused unless `relevance.raw_scale` matches. The guard covers only the live scorer, not replayed JSONL. About 9 ms GPU per 320×240 image.
 - **VLM agreement:** confusion table and Wilson 95% lower bounds per model; labels keyed by what was asked, so one label set scores several VLMs. Model-authored or conflicting labels are refused.
 
 ## Integration notes (greenfield)
@@ -196,18 +200,17 @@ There was no existing detector repository, so each interface is a neutral defaul
 | 3 | No calibrators; nothing auto-marked `complete`; shadow review rate ≈ 100% by design | **Open** → B-2 |
 | 4 | GPU time only from adapters that measure it | **Decided** → D-6 |
 | 5 | COCO-style export until a trainer exists | **Open** → B-7 |
-| 6 | CLI model versions unverified; file digests bound into the run key; CLIP hashes its weights | **Partly resolved** → T-1 |
+| 6 | CLI model versions unverified; file digests bound into the run key | **Partly resolved** → T-1 |
 | 7 | VLM is 4B | **Open** → D-7 |
 
-**Hardware:** RTX 5070 (12 GB), Python 3.13; the pixi `clip` env adds CUDA 12.8 torch + open_clip. **Fixture:** `tests/routing/helpers.make_fixture(dir)`: 3 images + 1 corrupt file, manifest, predictions, relevance; non-COCO classes `blue_widget_x9`, `zz-custom.class_7`.
+**Hardware:** RTX 5070 (12 GB), Python 3.13; CUDA 12.8 torch lives only in the Grounding DINO workspace. **Fixture:** `tests/routing/helpers.make_fixture(dir)`: 3 images + 1 corrupt file, manifest, predictions, relevance; non-COCO classes `blue_widget_x9`, `zz-custom.class_7`.
 
 ## How to run
 
 ```bash
-pixi install                    # add `-e clip` for the CLIP scorer
-pixi run test                   # 168 tests, no network / GPU (live: test-lmstudio, test-gdino, test-wemm, test-e2e)
-pixi run -e clip test-clip      # live CLIP (local weights)
-pixi run test-lmstudio          # live VLM (LM Studio)
+pixi install
+pixi run test                   # 184 tests, no network / GPU (live: test-vlm, test-gdino, test-wemm, test-e2e, test-live-required)
+pixi run test-vlm               # live VLM (any OpenAI-compatible endpoint)
 pixi run vad-route shadow --config configs/routing/example.yaml --images manifest.jsonl \
   --primary-predictions preds.jsonl --primary-version mymodel@sha --out runs/shadow1
 ```

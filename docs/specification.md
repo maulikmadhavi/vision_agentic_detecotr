@@ -230,11 +230,11 @@ src/routing/
   evaluation.py    isolation, frozen lock, route/cost report, VLM agreement
   export.py        COCO-style versioned export + loader
   cli.py           vad-route
-src/services/
-  contracts.py          svc-1.0 detector wire models
-  http_detector.py, wemm_mcp.py, lmstudio.py  detector, relevance and VLM clients
-  replay.py, open_clip.py, runtime.py  replay adapters; optional local scorer; shared helpers
-  grounding_dino/       detector server (own environment)
+src/services_embedding/      client.py: WeMM MCP relevance scorer
+src/service_detector_vlm/      openai_service_call.py: OpenAI-compatible VLM verifier
+src/service_detector_gdino/    client.py (RemoteDetector), contracts.py (svc-1.0), server.py, runtime.py, smoke.py
+                               own pixi workspace for the GPU server
+(routing/replay.py holds the file-based replay adapters)
 configs/routing/example.yaml
 tests/routing/, tests/services/
 ```
