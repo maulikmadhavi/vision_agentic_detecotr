@@ -256,6 +256,35 @@ def test_without_a_split_the_cohort_is_every_labelled_image(tmp_path):
     assert doc["cost"]["images"] == 1 and doc["out_of_cohort"] == {"results": 1, "image_ids": ["not-labelled"]}
 
 
+# --- S6: evidence needs human labels AND a verified frozen split -----------------------------------
+
+
+def _human(paths):
+    labels = json.loads(paths["labels"].read_text(encoding="utf-8"))
+    paths["labels"].write_text(json.dumps({**labels, "vad_label_provenance": "human"}), encoding="utf-8")
+
+
+def test_human_labels_on_a_verified_frozen_split_are_evidence(tmp_path):
+    paths, frozen, _ = _frozen_and_development_records(tmp_path)
+    _human(paths)
+    doc = _metrics(paths, tmp_path, [frozen], "m.json")
+    assert doc["evidence_status"] == "evidence: human labels on a verified frozen split"
+
+
+def test_human_labels_with_an_old_lock_are_not_a_finding_but_metrics_are_kept(tmp_path):
+    paths, manifest, *_ = _split_files(tmp_path)
+    _human(paths)
+    lock = json.loads(paths["lock"].read_text(encoding="utf-8"))
+    old = {k: lock[k] for k in ("image_ids", "group_ids", "annotations_sha256")}
+    old["lock_sha256"] = hashlib.sha256(canonical_json(old).encode()).hexdigest()
+    paths["lock"].write_text(json.dumps(old), encoding="utf-8")
+    paths["manifest"].write_text(json.dumps({**manifest, "frozen_lock_sha256": old["lock_sha256"]}), encoding="utf-8")
+    assert _evaluate_frozen(paths, tmp_path) == 0
+    doc = json.loads((tmp_path / "m.json").read_text(encoding="utf-8"))
+    assert doc["evidence_status"].startswith("NOT A FINDING") and "predates image hashes" in doc["evidence_status"]
+    assert "vad_label_provenance" not in doc["evidence_status"] and "detector" in doc and "cost" in doc
+
+
 @pytest.mark.parametrize("flag", ["--split-manifest", "--frozen-lock"])
 def test_evaluate_needs_both_split_flags_or_neither(tmp_path, capsys, flag):
     paths, *_ = _split_files(tmp_path)

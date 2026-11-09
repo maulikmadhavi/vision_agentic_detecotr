@@ -313,10 +313,29 @@ def test_detector_map_is_unavailable_when_a_detection_has_no_confidence():
     assert det["map50_95"] is None and "confidence" in det["map_unavailable"]
 
 
-def test_evidence_status_needs_declared_human_provenance():
-    assert evidence_status({}).startswith("NOT A FINDING")
-    assert evidence_status({"vad_label_provenance": "synthetic"}).startswith("NOT A FINDING")
-    assert evidence_status({"vad_label_provenance": "human"}) == "human labels (declared by vad_label_provenance)"
+HUMAN, VERIFIED = {"vad_label_provenance": "human"}, "verified frozen_eval"
+NO_SPLIT = "unverified: no --split-manifest/--frozen-lock; every labelled image is scored, whatever its split"
+OLD_LOCK = "unverified: the frozen labels match --frozen-lock, but the lock predates image hashes"
+
+
+def test_evidence_needs_human_labels_and_a_verified_frozen_split():
+    assert evidence_status(HUMAN, VERIFIED) == "evidence: human labels on a verified frozen split"
+
+
+@pytest.mark.parametrize("labels, split, says, not_says", [
+    ({}, VERIFIED, "vad_label_provenance", "frozen split"),
+    ({"vad_label_provenance": "synthetic"}, VERIFIED, "vad_label_provenance", "frozen split"),
+    (HUMAN, NO_SPLIT, "no verified frozen split", "vad_label_provenance"),
+    (HUMAN, OLD_LOCK, "predates image hashes", "vad_label_provenance"),
+], ids=["no provenance", "synthetic", "human, no split", "human, old lock"])
+def test_not_a_finding_names_the_missing_part(labels, split, says, not_says):
+    status = evidence_status(labels, split)
+    assert status.startswith("NOT A FINDING") and says in status and not_says not in status
+
+
+def test_not_a_finding_names_both_parts_when_both_are_missing():
+    status = evidence_status({}, NO_SPLIT)
+    assert "vad_label_provenance" in status and "no verified frozen split" in status
 
 
 def _labels_for_fixture(fx_root, provenance=None):
@@ -333,8 +352,9 @@ def _labels_for_fixture(fx_root, provenance=None):
     return path
 
 
-@pytest.mark.parametrize("provenance,status", [(None, "NOT A FINDING"), ("human", "human labels")])
-def test_cli_evaluate_writes_metrics_from_a_shadow_trace(tmp_path, capsys, provenance, status):
+@pytest.mark.parametrize("provenance,missing", [(None, "vad_label_provenance"), ("human", "no verified frozen split")])
+def test_cli_evaluate_writes_metrics_from_a_shadow_trace(tmp_path, capsys, provenance, missing):
+    """Without a split the metrics are still written (descriptive), but they are NOT A FINDING."""
     import json
 
     from routing import cli
@@ -350,7 +370,8 @@ def test_cli_evaluate_writes_metrics_from_a_shadow_trace(tmp_path, capsys, prove
     assert cli.main(["evaluate", "--config", str(fx["config"]), "--labels", str(_labels_for_fixture(fx["root"], provenance)),
                      "--trace", str(out / "route_trace.jsonl"), "--out", str(metrics)]) == 0
     doc = json.loads(metrics.read_text(encoding="utf-8"))
-    assert doc["evidence_status"].startswith(status) and status in capsys.readouterr().out
+    assert doc["evidence_status"].startswith("NOT A FINDING") and missing in doc["evidence_status"]
+    assert "NOT A FINDING" in capsys.readouterr().out
     assert doc["images"]["operational_failures"] == ["corrupt"]  # the corrupt image produced an ErrorRecord
     assert doc["detector"]["recall_by_class"][CLASS_A] == {"found": 1, "boxes": 1, "recall": 1.0}
     assert doc["cost"]["images"] == 3 and doc["iou_threshold"] == 0.5

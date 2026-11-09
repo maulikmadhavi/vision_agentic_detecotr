@@ -244,12 +244,19 @@ def image_results(records: Sequence) -> dict[str, ImageResult]:
         flagged_for_review=r.completeness.status != "complete") for r in records}
 
 
-def evidence_status(label_doc: Mapping) -> str:
-    """Metrics count as evidence only for labels declared human: top-level ``vad_label_provenance: "human"``."""
-    if label_doc.get("vad_label_provenance") == "human":
-        return "human labels (declared by vad_label_provenance)"
-    return ('NOT A FINDING: the label file does not declare "vad_label_provenance": "human" '
-            "(synthetic or unreviewed labels); these numbers test the tooling, not the detector")
+def evidence_status(label_doc: Mapping, split_status: str) -> str:
+    """Metrics count as evidence only with BOTH human labels (top-level ``vad_label_provenance: "human"``)
+    and a verified frozen split (``split_status`` "verified frozen_eval": labels and image content bound
+    by a frozen-lock-v2). Otherwise the metrics are still reported, labelled NOT A FINDING with what is missing.
+    """
+    missing = []
+    if label_doc.get("vad_label_provenance") != "human":
+        missing.append('the label file does not declare "vad_label_provenance": "human" (synthetic or unreviewed labels)')
+    if split_status != "verified frozen_eval":
+        missing.append(f"no verified frozen split ({split_status})")
+    if not missing:
+        return "evidence: human labels on a verified frozen split"
+    return "NOT A FINDING: " + "; ".join(missing) + "; these numbers describe the run, they are not evidence"
 
 
 def _size_stratum(box: Box) -> str:

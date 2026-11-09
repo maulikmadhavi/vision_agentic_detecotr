@@ -228,7 +228,7 @@ def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     # are only listed, so a development or unlabelled record cannot change any cohort metric.
     cohort = [r for r in records if r.image.id in ground_truth]
     outside = sorted(r.image.id for r in records if r.image.id not in ground_truth)
-    metrics = {"evidence_status": evidence_status(label_doc), "split": split,
+    metrics = {"evidence_status": evidence_status(label_doc, split["status"]), "split": split,
                **evaluate(ground_truth, task.class_ids, {r.image.id: results[r.image.id] for r in cohort}, args.iou),
                "cost": route_report(cohort), "out_of_cohort": {"results": len(outside), "image_ids": outside}}
     out = Path(args.out)
