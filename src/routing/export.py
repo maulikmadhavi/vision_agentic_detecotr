@@ -11,7 +11,7 @@ import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from .schemas import Detection, RouteRecord, TaskSpec, stable_id
+from .schemas import Detection, ReviewedRecord, RouteRecord, TaskSpec, stable_id
 
 
 def _categories(task: TaskSpec) -> list[dict]:
@@ -41,6 +41,30 @@ def export_routed(records: Sequence[RouteRecord], task: TaskSpec, out: str | Pat
                 anns.append(_ann(len(anns) + 1, idx, cat[c.class_id], c.box_xyxy,
                                  {"vad_candidate_id": c.id, "vad_source_ids": list(c.source_ids)}))
     return _write(task, images, anns, out, {"kind": "routed", "record_ids": sorted(r.record_id for r in records)})
+
+
+def export_reviewed(reviewed: Sequence[ReviewedRecord], task: TaskSpec, out: str | Path,
+                    splits: Mapping[str, str] | None = None) -> dict:
+    """COCO-style export after human review: accepted model boxes plus human-added boxes.
+
+    Rejected boxes are not exported. ``vad_source`` says whether the geometry came from a person
+    ("human") or a model ("model"); no score is written for either.
+    """
+    cat = {c["name"]: c["id"] for c in _categories(task)}
+    images, anns = [], []
+    for idx, r in enumerate(sorted(reviewed, key=lambda r: r.image.id), start=1):
+        images.append({"id": idx, "file_name": r.image.uri, "width": r.image.width, "height": r.image.height,
+                       "vad_image_id": r.image.id, "vad_record_id": r.record_id,
+                       "vad_completeness": r.completeness.status, "vad_adjudications": len(r.adjudications)})
+        if splits is not None:
+            images[-1]["vad_split"] = splits[r.image.id]
+        human = {d.id for d in r.human_detections}
+        for c in r.final_candidates:
+            if c.status == "accepted":
+                anns.append(_ann(len(anns) + 1, idx, cat[c.class_id], c.box_xyxy,
+                                 {"vad_candidate_id": c.id, "vad_source_ids": list(c.source_ids),
+                                  "vad_source": "human" if set(c.source_ids) <= human else "model"}))
+    return _write(task, images, anns, out, {"kind": "reviewed", "record_ids": sorted(r.record_id for r in reviewed)})
 
 
 def export_legacy(preds: Sequence[tuple[dict, Sequence[Detection]]], task: TaskSpec, out: str | Path) -> dict:

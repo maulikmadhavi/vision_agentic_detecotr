@@ -19,12 +19,13 @@ from service_detector_vlm.openai_service_call import OpenAICompatibleVerifier
 from services_embedding.client import WEMM_TEXT_SCALE, WeMMMCPRelevanceScorer
 
 from .evaluation import IsolationError, load_frozen, lock_frozen_set, route_report
-from .export import export_legacy, export_routed
+from .export import export_legacy, export_reviewed, export_routed
 from .image_inputs import ManifestEntry, image_id, load_image, load_manifest
 from .interfaces import Detector, RelevanceScorer
 from .metrics import LabelError, evaluate, evidence_status, image_results, load_ground_truth
 from .pipeline import RoutingPipeline
 from .replay import PrecomputedDetector, PrecomputedRelevance
+from .review import AdjudicationLogError, ReviewError, apply_adjudications, open_findings, read_adjudications
 from .sample import (
     SampleError, UnresolvedReviews, frozen_label_subset, group_manifest, make_split, merge_reviews, review_queue,
 )
@@ -72,6 +73,17 @@ def _parser() -> argparse.ArgumentParser:
     mg.add_argument("--queue", required=True, help="queue JSON from `vad-route sample review-queue`")
     mg.add_argument("--adjudications", help='{"vad_adjudications": 1, "decisions": {image_id: {decision, adjudicator}}}')
     mg.add_argument("--out", required=True, help="merged label file (A3 format)")
+    review = sub.add_parser("review", help="human review of a shadow run: findings to decide, then apply decisions")
+    review_sub = review.add_subparsers(dest="review_cmd", required=True)
+    rf = review_sub.add_parser("findings", help="list the open findings of a shadow run")
+    rf.add_argument("--trace", required=True, help="route_trace.jsonl of the shadow run")
+    rf.add_argument("--out", required=True, help="findings JSONL to write")
+    ra = review_sub.add_parser("apply", help="apply adjudications; write reviewed records and the reviewed export")
+    ra.add_argument("--config", required=True, help="the config the shadow run used")
+    ra.add_argument("--trace", required=True, help="route_trace.jsonl of the shadow run (never modified)")
+    ra.add_argument("--adjudications", required=True, help="append-only adjudications JSONL")
+    ra.add_argument("--out-dir", required=True, help="directory for reviewed.jsonl and annotations.json")
+    ra.add_argument("--split-manifest", help="split manifest; tags each exported image with vad_split")
     for name in ("shadow", "legacy"):
         p = sub.add_parser(name)
         p.add_argument("--config", required=True)
@@ -119,6 +131,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_evaluate(parser, args)
     if args.cmd == "sample":
         return _run_sample(parser, args)
+    if args.cmd == "review":
+        return _run_human_review(parser, args)
 
     cfg = load_config(args.config)
     out = Path(args.out)
@@ -202,6 +216,57 @@ def _run_sample(parser: argparse.ArgumentParser, args: argparse.Namespace) -> in
     to_check = sum(1 for p in doc["pairs"] if p["reason"] == "near_duplicate")
     print(f"{len(doc['images'])} images in {len(groups)} groups; {to_check} near-duplicate pairs to confirm; "
           f"{len(doc['unreadable'])} unreadable; written to {out}")
+    return 0
+
+
+def _read_trace(path: str) -> list[RouteRecord]:
+    lines = Path(path).read_text(encoding="utf-8").splitlines()
+    return [RouteRecord.model_validate_json(line) for line in lines if line.strip()]
+
+
+def _run_config(parser: argparse.ArgumentParser, cfg: RoutingConfig, records: list[RouteRecord]) -> RoutingConfig:
+    """The config a shadow run actually hashed: shadow enables routing, and --vlm enables the VLM."""
+    routed = cfg.model_copy(update={"routing_enabled": True})
+    variants = [cfg, routed, routed.model_copy(update={"vlm": cfg.vlm.model_copy(update={"enabled": True})})]
+    hashes = {r.run.config_hash for r in records}
+    for variant in variants:
+        if not hashes or hashes == {variant.config_hash()}:
+            return variant
+    parser.error(f"--config does not match the run (run config hashes {sorted(hashes)}); "
+                 "the re-audit needs the config the shadow run used")
+
+
+def _run_human_review(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    records = _read_trace(args.trace)
+    if args.review_cmd == "findings":
+        findings = [f for r in records for f in open_findings(r)]
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("".join(json.dumps(f, sort_keys=True) + "\n" for f in findings), encoding="utf-8")
+        print(f"{len(findings)} open findings in {len({f['record_id'] for f in findings})} images; written to {out}")
+        return 0
+    cfg = _run_config(parser, load_config(args.config), records)
+    splits = None
+    if args.split_manifest:
+        manifest = json.loads(Path(args.split_manifest).read_text(encoding="utf-8"))
+        if manifest.get("version") != "split-v1":
+            parser.error("--split-manifest must be a split-v1 file from `vad-route sample split`")
+        splits = {i: img["split"] for i, img in manifest["images"].items()}
+        if missing := sorted(r.image.id for r in records if r.image.id not in splits):
+            parser.error(f"images not in --split-manifest: {missing[:5]}")
+    try:
+        reviewed = apply_adjudications(records, read_adjudications(args.adjudications), cfg)
+    except (ReviewError, AdjudicationLogError) as e:
+        parser.error(str(e))
+    out = Path(args.out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "reviewed.jsonl").write_text("".join(r.model_dump_json() + "\n" for r in reviewed), encoding="utf-8")
+    export_reviewed(reviewed, cfg.task, out / "annotations.json", splits)
+    if splits and (frozen := sum(len(r.adjudications) for r in reviewed if splits[r.image.id] == "frozen_eval")):
+        print(f"warning: {frozen} adjudications on frozen_eval images: kept, and those images are exported with "
+              "vad_split=frozen_eval so fitting and training refuse them", file=sys.stderr)
+    done = sum(r.completeness.status == "complete" for r in reviewed)
+    print(f"{len(reviewed)} images reviewed, {done} complete; written to {out}")
     return 0
 
 
