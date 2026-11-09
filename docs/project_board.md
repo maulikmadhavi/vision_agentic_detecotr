@@ -4,7 +4,7 @@
 
 **Status:** phases 0–4 done, Phase 5 started, Phase 6 not started. Routing is off by default (`routing_enabled: false`). `pixi run test`: 92 passed; live `test-clip` and `test-lmstudio`: 1 passed each. Environments: pixi only. Git: tags `v0.1-phase4-baseline` (208713e) and `v0.2-r3-blockers-fixed` (0435d99); `backup/pre-author-rewrite` holds the pre-rewrite history.
 
-The original plan (spec text and Codex prompt) lives in git history (`git show 208713e:docs/project_board.md`). This board tracks its requirements as a checklist instead.
+The requirements and acceptance criteria are in [specification.md](specification.md); this board tracks their status only.
 
 ## Phases
 
