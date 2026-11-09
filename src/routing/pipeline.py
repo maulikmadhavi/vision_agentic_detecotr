@@ -288,7 +288,10 @@ class RoutingPipeline:
         self.store.put_record(rec)
         return rec
 
-    def _candidates(self, primary, secondary, sahi, decision, ran_extra, mislocalized_ids) -> list[FinalCandidate]:
+    def _candidates(
+        self, primary: Sequence[Detection], secondary: Sequence[Detection], sahi: Sequence[Detection],
+        decision: RouteDecision, ran_extra: bool, mislocalized_ids: set[str],
+    ) -> list[FinalCandidate]:
         out = []
         rc = decision.reason_codes
         low_rel = "low_relevance_with_detections" in rc
@@ -323,35 +326,20 @@ class RoutingPipeline:
             out.append(final_candidate(fc, status, flags))
         return sorted(out, key=lambda c: c.id)
 
-    def _verify(self, image, ref, key, sa, candidates, within_budget, failures):
-        cfg, vlm = self.cfg, self.vlm
+    def _verify(
+        self, image: Image.Image, ref: ImageRef, key: str, sa: StageA, candidates: list[FinalCandidate],
+        within_budget: Callable[[str], bool], failures: list[str],
+    ) -> tuple[list[FinalCandidate], list[VerificationResult], list[VerificationResult], int]:
+        """Bounded VLM pass: reviewable candidates first, then high-relevance classes without an accepted box.
+
+        Every request counts toward the per-image cap, including answers reused from the
+        step cache on resume, so the logical cap holds across restarts.
+        """
+        cfg = self.cfg
         names = {c.class_id: c.positive_prompts[0] for c in cfg.task.classes}
         cap = cfg.budgets.max_vlm_calls
         calls = 0
         verifications: list[VerificationResult] = []
-
-        def ask(req: VerificationRequest) -> VerificationResult:
-            nonlocal calls
-            calls += 1
-            cached = self.store.get_step(key, f"vlm:{req.id}")
-            if cached is not None:
-                return VerificationResult.model_validate(cached)
-            # At-most-once: the attempt is persisted *before* the external call. If a previous
-            # process died between sending and saving the answer, the request is not re-sent
-            # (the VLM has no idempotency key); the lost answer becomes `uncertain` -> review.
-            if self.store.get_step(key, f"vlm_attempt:{req.id}") is not None:
-                res = uncertain(req, "vlm_interrupted", vlm.model_version,
-                                "call started before an interruption; answer was not persisted")
-            else:
-                self.store.put_step(key, f"vlm_attempt:{req.id}", {"request_id": req.id})
-                try:
-                    res = vlm.verify(image, req, names[req.class_id])
-                except Exception as e:  # adapters should not raise, but never trust that
-                    res = uncertain(req, "vlm_unavailable", vlm.model_version, type(e).__name__)
-                if not self._verification_matches_request(res, req):
-                    res = uncertain(req, "vlm_contradictory", vlm.model_version)
-            self.store.put_step(key, f"vlm:{req.id}", res.model_dump(mode="json"))
-            return res
 
         updated = []
         for c in candidates:
@@ -365,7 +353,8 @@ class RoutingPipeline:
             req = VerificationRequest(id=stable_id("vreq", [key, "confirm", c.id]), image_id=ref.id,
                                       class_id=c.class_id, candidate_ids=(c.id,), region_xyxy=c.box_xyxy,
                                       purpose="confirm_candidate")
-            res = ask(req)
+            calls += 1
+            res = self._verify_request(image, key, req, names[req.class_id])
             verifications.append(res)
             flags = c.flags + ("vlm_absent",) if res.verdict == "absent" and not cfg.vlm.absent_rejects else c.flags
             updated.append(c.model_copy(update={"status": self._candidate_status_after_verification(c, res), "verification": res, "flags": flags}))
@@ -380,8 +369,33 @@ class RoutingPipeline:
                 continue
             req = VerificationRequest(id=stable_id("vreq", [key, "missing", cid]), image_id=ref.id,
                                       class_id=cid, purpose="suspected_missing_class")
-            missing.append(ask(req))
+            calls += 1
+            missing.append(self._verify_request(image, key, req, names[req.class_id]))
         return sorted(updated, key=lambda c: c.id), verifications, missing, calls
+
+    def _verify_request(self, image: Image.Image, key: str, req: VerificationRequest,
+                        class_description: str) -> VerificationResult:
+        """One VLM request with at-most-once delivery; the result is persisted under ``vlm:<id>``."""
+        vlm = self.vlm
+        cached = self.store.get_step(key, f"vlm:{req.id}")
+        if cached is not None:
+            return VerificationResult.model_validate(cached)
+        # At-most-once: the attempt is persisted *before* the external call. If a previous
+        # process died between sending and saving the answer, the request is not re-sent
+        # (the VLM has no idempotency key); the lost answer becomes `uncertain` -> review.
+        if self.store.get_step(key, f"vlm_attempt:{req.id}") is not None:
+            res = uncertain(req, "vlm_interrupted", vlm.model_version,
+                            "call started before an interruption; answer was not persisted")
+        else:
+            self.store.put_step(key, f"vlm_attempt:{req.id}", {"request_id": req.id})
+            try:
+                res = vlm.verify(image, req, class_description)
+            except Exception as e:  # adapters should not raise, but never trust that
+                res = uncertain(req, "vlm_unavailable", vlm.model_version, type(e).__name__)
+            if not self._verification_matches_request(res, req):
+                res = uncertain(req, "vlm_contradictory", vlm.model_version)
+        self.store.put_step(key, f"vlm:{req.id}", res.model_dump(mode="json"))
+        return res
 
     @staticmethod
     def _verification_matches_request(res: object, req: VerificationRequest) -> bool:
