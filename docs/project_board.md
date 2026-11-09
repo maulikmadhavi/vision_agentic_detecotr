@@ -321,20 +321,21 @@ Dated history lives in `git log`; the reviewer's findings are in [reviewer_sugge
 2. **Primary detector**, then **Stage B**: box features and difficulty. Zero boxes give difficulty `unknown`, never `easy`.
 3. **`policy.route`** (pure, ordered rules; same inputs give the same actions and reason codes):
    - Low relevance and zero boxes: `standard` plus a hash-sampled audit. Nothing is discarded.
-   - High or unknown relevance and zero boxes, or high miss risk (hard, small box, crowding): escalate to `sahi`, `secondary`, `vlm_verify`, `human_review` as available.
-   - Moderate relevance or medium difficulty: `secondary`, then VLM or human. Without a secondary, VLM or human, never auto-accept.
+   - Low relevance with detections: `vlm_verify` (or `human_review` without a VLM), never accepted unreviewed.
+   - High relevance and zero boxes (unknown relevance too if `unknown_relevance_as: high`), or high miss risk (hard, small box, crowding): escalate to `sahi`, `secondary`, `vlm_verify`, `human_review` as available.
+   - Moderate or unknown relevance (default), or medium/unknown difficulty: `secondary`, then VLM or human. Without a secondary, VLM or human, never auto-accept.
    - High relevance and low difficulty: `standard`.
    - A calibrated class with no probability: `human_review`.
    - Slice, VLM-call, elapsed or GPU caps stop escalation and leave `needs_review`.
 4. **Fuse and verify** (`matching`, `pipeline._verify`): class-aware fusion keeps every source ID. The VLM only answers `present`, `absent` or `uncertain`; it never creates or moves a box.
-5. **Completeness audit**: `complete` needs a human and nothing left open. Only `accepted` boxes are exported.
+5. **Completeness audit**: `complete` needs a human or a calibrated audit policy, and nothing left open. Only `accepted` boxes are exported.
 
 ## Behavior changes to know about
 
 | Change | Why | Knob / default |
 |---|---|---|
 | VLM `absent` sends a box to review instead of rejecting it (F-21) | The 4B model answers `absent` on blank crops. A wrongly rejected box silently leaves the export; a wrongly reviewed one only costs reviewer time. | `vlm.absent_rejects: false` |
-| A moderate route with no working secondary no longer auto-accepts primary boxes (F-22) | Boxes carry `secondary_unconfirmed` and go to the VLM or to review. | `policy.moderate_without_secondary` |
+| A moderate route with no working secondary no longer auto-accepts primary boxes (F-22) | Boxes carry `secondary_unconfirmed` and go to the VLM or to review. | none (`policy.moderate_without_secondary` only picks VLM vs human) |
 | An interrupted VLM request becomes `uncertain` on resume and is not re-sent (F-28) | An attempt marker is written before the call, so no call repeats. The cost is a possibly lost answer. | none |
 | A calibrated class with no probability is unknown, not judged by raw similarity (F-32, P2) | Raw and calibrated scales must not mix. The class goes to `human_review` and the audit lists it. | none |
 | New config fields changed `config_hash` | Old `runs/*/routes.sqlite` caches are not reused. | none |
