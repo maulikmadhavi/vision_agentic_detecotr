@@ -2,7 +2,7 @@
 
 **Updated:** 2026-11-09 · **Owner:** user · **Implementer:** Claude · **Review log:** [reviewer_suggestion.md](reviewer_suggestion.md)
 
-**Status:** phases 0–4 done, Phase 5 started, Phase 6 not started. Routing is off by default (`routing_enabled: false`). `pixi run test`: 112 passed; live `test-clip` and `test-lmstudio`: 1 passed each. Environments: pixi only. Git: tags `v0.1-phase4-baseline` (208713e) and `v0.2-r3-blockers-fixed` (0435d99); `backup/pre-author-rewrite` holds the pre-rewrite history.
+**Status:** phases 0–4 done, Phase 5 started, Phase 6 not started. Routing is off by default (`routing_enabled: false`). `pixi run test`: 119 passed; live `test-clip` and `test-lmstudio`: 1 passed each. Environments: pixi only. Git: tags `v0.1-phase4-baseline` (208713e) and `v0.2-r3-blockers-fixed` (0435d99); `backup/pre-author-rewrite` holds the pre-rewrite history.
 
 The requirements and acceptance criteria are in [specification.md](specification.md); this board tracks their status only.
 
@@ -35,7 +35,7 @@ The requirements and acceptance criteria are in [specification.md](specification
 
 | ID | Card | Why |
 |---|---|---|
-| T-1 | **Serve a real primary detector** behind the `svc-1.0` contract (self-hosted, e.g. Grounding DINO in its own container; or a normalizing adapter for a hosted API). `RemoteDetector` (F-35) is the client; no server, CLI flag (`--primary-url`) or hosted adapter exists yet. Hosted APIs send images off-machine: check terms and data handling first; credentials by env reference. Needs the user's 30–50 trial images. | Unblocks real shadow runs, SAHI, the benchmark and rollout. |
+| T-1 | **Serve a real primary detector** behind the `svc-1.0` contract (self-hosted, e.g. Grounding DINO in its own container; or a normalizing adapter for a hosted API). `RemoteDetector` (F-35) is the client; CLI flag `--primary-url` exists (8da5fe0); no server or hosted adapter yet. Hosted APIs send images off-machine: check terms and data handling first; credentials by env reference. Needs the user's 30–50 trial images. | Unblocks real shadow runs, SAHI, the benchmark and rollout. |
 | T-2 | **Build the human-checked sample** (class, domain, resolution, size, crowding, positives/negatives, low similarity); split calibration / development / frozen by source group; lock the frozen set. | Every Phase 5 card needs it. |
 | T-3 | **Independent review** (human or Codex) of `pipeline._candidates`, `_verify`, `_apply`, `policy.route`. | Same model family wrote and reviewed the code. |
 | T-4 | **Stage A gaps:** compression indicator; domain-distance when a reference distribution exists (`StageA.domain_distance` is never filled). | Spec Stage A list; domain-shift audit sampling (rule 7). |
@@ -193,7 +193,7 @@ There was no existing detector repository, so each interface is a neutral defaul
 
 ```bash
 pixi install                    # add `-e clip` for the CLIP scorer
-pixi run test                   # 112 tests, no network / GPU
+pixi run test                   # 119 tests, no network / GPU
 pixi run -e clip test-clip      # live CLIP (local weights)
 pixi run test-lmstudio          # live VLM (LM Studio)
 pixi run vad-route shadow --config configs/routing/example.yaml --images manifest.jsonl \
