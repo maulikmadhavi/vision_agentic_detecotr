@@ -215,3 +215,36 @@ def test_rename_keeps_run_keys_and_old_name_alias():
                            relevance=WeMMMCPRelevanceScorer(url=URL))
     assert pipe.record_key(ref) == "rec-e025bfad645c479b"
     assert remote_adapters.RemoteRelevanceScorer is WeMMMCPRelevanceScorer
+
+
+# --- Stage F: a run where the scorer failed must say so ------------------------------------------
+
+
+def test_route_report_counts_relevance_scorer_failures(tmp_path):
+    from vad.routing.evaluation import route_report
+
+    class Broken:
+        model_version = "broken@1"
+
+        def score(self, image, image_id, prompts):
+            raise RuntimeError("down")
+
+    pipe = RoutingPipeline(config(), ScriptedDetector({"a": [], "b": []}), RouteStore(tmp_path / "r.sqlite"),
+                           relevance=Broken())
+    recs = [pipe.process(ManifestEntry(str(draw(tmp_path / f"{n}.png", (320, 240), [])), image_id=n)) for n in "ab"]
+    assert route_report(recs)["relevance_scorer_failures"] == {"count": 2, "types": {"RuntimeError": 2}}
+    ok = _route(tmp_path, scorer(lambda b, n: rpc_result(scores_payload([0.2] * len(b["params"]["arguments"]["right"]))))[0])
+    assert route_report([ok])["relevance_scorer_failures"] == {"count": 0, "types": {}}
+
+
+def test_cli_warns_on_stderr_when_the_scorer_failed(tmp_path, monkeypatch, capsys):
+    from vad.routing import cli
+    monkeypatch.setenv("VAD_WEMM_URL", URL)
+    monkeypatch.setattr(cli, "WeMMMCPRelevanceScorer", lambda **kw: WeMMMCPRelevanceScorer(
+        transport=server(FAILURES["isError"], []), **kw))
+    out = tmp_path / "out"
+    assert cli.main(_args(_fx(tmp_path), out)) == 0  # the run still completes; images go to review
+    err = capsys.readouterr().err
+    assert "relevance scorer failed for 3 of 3 images" in err and "RemoteScorerError" in err
+    report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+    assert report["relevance_scorer_failures"] == {"count": 3, "types": {"RemoteScorerError": 3}}

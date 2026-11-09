@@ -175,7 +175,10 @@ def route_report(records: Sequence[RouteRecord]) -> dict:
     n = len(records)
     lat = [r.trace.elapsed_ms for r in records]
     review = sum(r.completeness.status != "complete" for r in records)
+    scorer_failed = [w.split(":", 1)[1] for r in records for w in r.stage_a.warnings
+                     if w.startswith("relevance_scorer_failed:")]
     return {
+        "relevance_scorer_failures": {"count": len(scorer_failed), "types": dict(Counter(scorer_failed))},
         "images": n,
         "actions": dict(Counter(a for r in records for a in r.route.actions)),
         "reason_codes": dict(Counter(c for r in records for c in r.route.reason_codes)),

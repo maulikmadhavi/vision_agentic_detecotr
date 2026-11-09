@@ -151,6 +151,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
     print(json.dumps(report, indent=2))
+    if (failed := report["relevance_scorer_failures"])["count"]:
+        print(f"warning: relevance scorer failed for {failed['count']} of {report['images']} images "
+              f"({failed['types']}); their relevance is 'unavailable' and they were routed to review", file=sys.stderr)
     return 0
 
 
