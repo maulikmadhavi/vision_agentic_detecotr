@@ -65,3 +65,41 @@ def test_r3_2_cross_class_conflict_survives_vlm_absent(tmp_path):
         (CLASS_A, "needs_review"), (CLASS_B, "needs_review")]
     assert all("cross_class_conflict" in c.flags for c in rec.final_candidates)
     assert rec.completeness.status != "complete"
+
+
+# R3-3: interruption between the VLM call and persisting its answer ------------------------------
+
+
+class Kill(BaseException):
+    """Simulates the process dying (not an ordinary exception)."""
+
+
+def test_r3_3_crash_after_vlm_answer_before_persist_never_resends(tmp_path):
+    entry = _entry(tmp_path)
+    primary = ScriptedDetector({"a": [RawDetection(CLASS_A, (40, 40, 200, 200), 0.97)]})
+    rel = ScriptedRelevance({"a": {CLASS_A: 0.4, CLASS_B: 0.1}})  # moderate, no secondary -> VLM confirms box
+    cfg = config(vlm={"enabled": True})
+    path = tmp_path / "r.sqlite"
+
+    store = RouteStore(path)
+    real_put = store.put_step
+
+    def put_step(key, step, payload):  # the VLM has answered; die before its answer is saved
+        if step.startswith("vlm:"):
+            raise Kill()
+        real_put(key, step, payload)
+
+    store.put_step = put_step
+    first = FakeVLM(default="present")
+    try:
+        RoutingPipeline(cfg, primary, store, relevance=rel, vlm=first).process(entry)
+    except Kill:
+        pass
+    assert len(first.requests) == 1
+
+    again = FakeVLM(default="present")
+    rec = RoutingPipeline(cfg, primary, RouteStore(path), relevance=rel, vlm=again).process(entry)
+    assert again.requests == []  # at-most-once: the interrupted request is not re-sent
+    (c,) = rec.final_candidates
+    assert c.status == "needs_review" and c.verification.reason_code == "vlm_interrupted"
+    assert rec.completeness.status == "unresolved"

@@ -452,12 +452,20 @@ class RoutingPipeline:
             cached = self.store.get_step(key, f"vlm:{req.id}")
             if cached is not None:
                 return VerificationResult.model_validate(cached)
-            try:
-                res = vlm.verify(image, req, names[req.class_id])
-            except Exception as e:  # adapters should not raise, but never trust that
-                res = uncertain(req, "vlm_unavailable", vlm.model_version, type(e).__name__)
-            if not self._answers(res, req):
-                res = uncertain(req, "vlm_contradictory", vlm.model_version)
+            # At-most-once: the attempt is persisted *before* the external call. If a previous
+            # process died between sending and saving the answer, the request is not re-sent
+            # (the VLM has no idempotency key); the lost answer becomes `uncertain` -> review.
+            if self.store.get_step(key, f"vlm_attempt:{req.id}") is not None:
+                res = uncertain(req, "vlm_interrupted", vlm.model_version,
+                                "call started before an interruption; answer was not persisted")
+            else:
+                self.store.put_step(key, f"vlm_attempt:{req.id}", {"request_id": req.id})
+                try:
+                    res = vlm.verify(image, req, names[req.class_id])
+                except Exception as e:  # adapters should not raise, but never trust that
+                    res = uncertain(req, "vlm_unavailable", vlm.model_version, type(e).__name__)
+                if not self._answers(res, req):
+                    res = uncertain(req, "vlm_contradictory", vlm.model_version)
             self.store.put_step(key, f"vlm:{req.id}", res.model_dump(mode="json"))
             return res
 
