@@ -1,5 +1,53 @@
 # Reviewer suggestions — adaptive object detection routing
 
+## Naming and structure review — 2026-11-09
+
+**Scope:** inspected adapter implementations, orchestration/persistence, service contracts, CLI wiring, Grounding DINO startup, packaging, and representative test imports. This is a maintainability review, not a complete correctness audit; no source files were changed or model services called. Earlier test counts below are historical and were not rerun for this review.
+
+**Recommendation:** make a few responsibility-based extractions and clarify provider-specific names. Keep `vad.routing`, the existing protocol methods, CLI flags, and persisted identifiers stable. The following are proposals, not defects.
+
+| Priority | Current → proposed | Implication and migration solution |
+|---|---|---|
+| First | `remote_adapters.py:104` `RemoteRelevanceScorer` → `WeMMMCPRelevanceScorer` | The implementation checks WeMM metadata, calls `compute_similarity`, and aggregates positive-prompt cosines; it is not a generic remote scorer. Update CLI/test imports and monkeypatch targets; retain the old class as an alias. Keep `wemm_text_cosine_v1`, model-version formatting and aggregation unchanged. |
+| First | `pipeline.py:503` `_answers` → `_verification_matches_request`; `:508` `_apply` → `_candidate_status_after_verification` | The former checks request/class/candidate/region binding; the latter returns a status rather than mutating a candidate. Update the two internal callers at lines 467 and 487. Preserve cross-class conflict and `absent_rejects` behavior; run verification regression tests. |
+| First | Persistence in `pipeline.py:75–157` → `store.py`; manifest/image loading at `:41–72` → `image_inputs.py` | SQLite, output locking and filesystem input obscure orchestration. Move existing definitions unchanged; keep compatibility re-exports in `pipeline.py` because CLI and multiple tests import them there. Check for import cycles, lock behavior, resume and corrupt-image handling. External consumers are unverified. |
+| Next | Mixed `adapters.py`, `remote_adapters.py`, `embedder.py` → provider modules under `backends/`, with protocols in `interfaces.py` | Protocols, replay, HTTP/MCP and local GPU inference have different responsibilities. Extract protocols/result types first, then move implementations incrementally. Keep the old three modules as compatibility facades; retain lazy torch imports. Avoid replacing `adapters.py` with a same-named directory in the same step. |
+| Next | `embedder.py:40–74` `file_sha256`, `GpuTimer`, `cuda_timer` → `vad/runtime/hashing.py` and `vad/runtime/gpu_timing.py` | Grounding DINO imports these helpers from the CLIP implementation (`server.py:93`). Shared runtime helpers remove that misleading dependency. Preserve lazy torch loading and `None` for unmeasured GPU time; update both consumers and retain old imports temporarily. No new dependency is needed. |
+| Optional | `OpenClipRelevance` → `OpenClipRelevanceScorer`; `LMStudioVLM` → `LMStudioVerifier` | Makes the scorer/verifier roles explicit and consistent with protocols. Lower value than the changes above; combine with provider-module moves, not a separate sweeping rename. Keep aliases and all model/cache identifiers unchanged. |
+
+**Proposed target (only existing responsibilities; reach incrementally):**
+
+```text
+src/vad/
+  runtime/                 hashing.py, gpu_timing.py
+  routing/
+    pipeline.py            orchestration + compatibility re-exports
+    store.py               RouteStore, job_lock, StoreLockedError
+    image_inputs.py        ManifestEntry, load_manifest, load_image
+    interfaces.py          Detector/RelevanceScorer/VLMVerifier contracts and result types
+    detection_mapping.py   existing to_detections coordinate/class normalization
+    verification_results.py  existing uncertain-result builder and answer parser
+    backends/
+      replay.py            precomputed detector and relevance implementations
+      http_detector.py     existing svc-1.0 detector client
+      wemm_mcp.py           existing WeMM client
+      lmstudio.py           existing verifier client
+      open_clip.py          existing optional local scorer
+    adapters.py            compatibility facade
+    remote_adapters.py     compatibility facade
+    embedder.py            compatibility facade
+    service_contracts.py   keep existing wire names and svc-1.0
+third_party_service/        retain separate service environments and current path
+```
+
+**Keep as is:** `Detector.detect`, `RelevanceScorer.score`, `VLMVerifier.verify`, `RoutingPipeline`, `RouteStore`, and domain terms `iou`/`ios`. Keep `schemas.py`, `policy.py`, `matching.py`, `slicing.py`, and `task_config.py` until evidence justifies further splitting. Do not rename serialized `StageA`/`StageB`, `sahi`, schema versions or score-scale strings as part of a naming cleanup. Keep the user-selected `third_party_service/` directory: renaming it to `services/` brings little benefit and affects Pixi commands and documentation. The current Grounding DINO implementation uses Hugging Face Transformers, not TAO.
+
+**Migration order:** internal helper names → store/input extraction → provider naming/modules → shared runtime helpers. Each step should preserve behavior and old imports. Validate current CLI entry points, schema drift, cache/replay, crop offsets, verifier binding and mocked service tests; run Grounding DINO's own suite in its separate environment after shared-helper moves. Update monkeypatch targets deliberately; compatibility aliases alone do not redirect a patched CLI binding. Compare test collection before/after so moving files does not silently drop tests.
+
+**Documentation gap:** the older service proposal below now describes implemented files as future work. `RemoteDetector`, `RemoteRelevanceScorer`, service contracts and the Grounding DINO server exist, and the CLI wires both remote clients. The board's detector checklist/integration notes still say replay-only despite its F-35/F-36 entries. Reconcile these with the code, distinguishing implemented, mocked-tested, live-tested and real-data-benchmarked. Keep historical evidence, but move superseded proposals out of the active task list. This review does not independently verify reported live timings or deployment readiness.
+
+## Earlier functional and environment review (historical)
+
 **Reviewed:** 2026-11-09 · **Status:** phases 0–4 implemented for the greenfield repository; Phase 5 has utilities but no real-data calibration; Phase 6 has not started. Routing remains disabled by default. See [project_board.md](project_board.md) for the plan and project tasks.
 
 **Verification (Pixi review, 2026-11-09):** `.pixi\envs\default\python.exe -m pytest -q` passed **92 tests, 2 deselected**. `pixi run --locked test` stopped before tests because this review sandbox could not persist a Pixi/uv interpreter-cache file (access denied). This is an environment limitation, not evidence of a repository defect. A fresh locked installation, Linux execution and the optional live tests were not verified in this review.
