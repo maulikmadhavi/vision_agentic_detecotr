@@ -211,3 +211,32 @@ Scope: compared `project_board.md` Parts A–D with the present source and tests
 5. **Keep D-5 and B-2/B-3 as measurement gates.** The CLIP prompt-softmax score is raw and prompt-set dependent. The scale guard catches live `OpenClipRelevance`, but replayed JSONL scores have no scale metadata check. Neither the example relevance bands nor any `absent` VLM verdict should be promoted to an automatic negative/rejection decision from the fixture tests.
 
 **Suggested order:** fix R3-1 and R3-2 with regression tests; define the recovery guarantee and address R3-3; fix R3-4 and R3-5; then run a real-image shadow with saved predictions and build the human-labelled split before fitting thresholds or considering Phase 6. Preserve the board's current “routing disabled by default” setting during this work.
+
+## 8. Review of changes since §7 (2026-11-09)
+
+The five R3 findings in §6 are **historical findings now addressed in code**. This review inspected commits `f2dd581` through `0435d99`, the new `test_r3.py`, and the current board. The default suite passed **87 tests, 2 deselected**. I did not rerun the optional live CLIP or LM Studio tests. The branch has **12 commits**; `docs/project_board.md` still says 11 commits in its snapshot. No source file was changed during this review.
+
+### Done and verified in this review
+
+| Finding | Current result | Evidence |
+|---|---|---|
+| R3-1, mixed exports on a reused output directory | **Fixed.** CLI exports `RouteRecord` and `ErrorRecord` objects returned by the current `pipe.run(entries)` call. | `cli.main`; `test_r3_1_reused_out_dir_exports_only_the_current_run` |
+| R3-2, cross-class conflict rejected on VLM `absent` | **Fixed under the default policy.** `_apply` checks `cross_class_always_review` before any verdict. Setting that policy knob to false deliberately changes this behavior. | `pipeline._apply`; `test_r3_2_cross_class_conflict_survives_vlm_absent` |
+| R3-3, repeated VLM call after a call/persist crash | **Resolved with an at-most-once policy.** A durable attempt marker precedes the call; an interrupted request becomes `uncertain`/review on resume instead of being resent. This can lose an answer if a process dies before sending the request, which is an intentional availability tradeoff. | `pipeline._verify.ask`; `test_r3_3_crash_after_vlm_answer_before_persist_never_resends` |
+| R3-4, missing scorer class with low calibrated aggregate | **Partially fixed.** Missing *raw scorer* classes now raise a low band to medium; see R4-1 below for incomplete calibrator output. | `scoring.stage_a`; `test_r3_4_missing_class_with_calibrator_is_not_low_relevance` |
+| R3-5, bare human `complete` clears open findings | **Fixed for the current audit inputs.** Open unmatched candidates, unresolved checks or escalation failures prevent a `complete` status. Explicit per-finding human adjudication is still absent. | `completeness.audit`; `test_r3_5_human_complete_does_not_clear_open_findings` |
+
+### New actionable finding
+
+| ID | Severity | Finding | Suggested change |
+|---|---|---|---|
+| R4-1 | **Medium; gate before calibration is enabled** | `scoring.stage_a` checks whether raw scorer output covers every task class, but does not check the per-class probability mapping returned by `calibrator.calibrate(raw)`. A scorer with both class scores and a calibrator returning probabilities for only one class plus `any_p=0.02` produces `relevance_status="calibrated"`, `relevance_band="low"`, and `relevance_probability=None` for the omitted class. I reproduced this in memory. A low-relevance zero-box route could therefore miss an uncalibrated class. The aggregate also needs to be checked against its per-class probabilities. | Require complete, finite, in-range per-class calibrator output before allowing a calibrated low band; verify `P(any target) >= max(P(class))` or mark an inconsistent result unavailable/unknown. Add tests for missing class output and inconsistent aggregate. |
+
+### Remaining work by phase
+
+- **Phases 0–4:** code and default acceptance tests are in place; real primary and optional independent secondary detector adapters, real-image shadow results and real SAHI validation are still missing. The feature flag remains disabled by default.
+- **Phase 5:** frozen-set utilities and synthetic VLM agreement tests exist. A human-checked split, relevance/difficulty calibration, threshold fitting, numeric promotion targets, frozen three-way benchmark and trainer integration are missing. Frozen-set isolation is a utility, not enforced by the shadow CLI.
+- **Phase 6:** no canary, gated promotion or rollback exercise exists.
+- **Documentation:** the board's “How to run” line still says 82 default tests, and its snapshot says 11 commits; the current values are 87 passed and 12 commits. Earlier §6–§7 text records the state *before* the R3 fixes and should be read as historical review notes.
+
+**Next order:** close R4-1 before implementing or enabling a calibrator; choose a real detector and collect saved predictions on a labelled sample; establish the split and targets; fit and evaluate on isolated data; then plan the canary. The optional live integration tests should be rerun when the corresponding services and weights are available.

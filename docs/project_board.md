@@ -9,7 +9,7 @@ This file merges what used to be three documents: the plan (`adaptive_object_det
 - **Part C — Integration map:** greenfield defaults, hardware, fixture, assumptions.
 - **Part D — Implementation log:** dated rationale for what was built.
 
-**Snapshot:** phases 0–4 done, Phase 5 started, Phase 6 not started. Routing is disabled by default (`routing_enabled: false`). Tests: 87 default passed (as reported by main_agent after R3-5); `-m clip` and `-m lmstudio` last passed at 1 each. Reviewer blockers R3-1…R3-5 are fixed. **Git:** 11 commits on `master`, tags `v0.1-phase4-baseline` (208713e) and `v0.2-r3-blockers-fixed` (0435d99); the backup branch `backup/pre-author-rewrite` holds the pre-rewrite history.
+**Snapshot:** phases 0–4 done, Phase 5 started, Phase 6 not started. Routing is disabled by default (`routing_enabled: false`). Tests: 87 default passed (reviewer §8 reran them); `-m clip` and `-m lmstudio` last passed at 1 each, not rerun since. R3-1…R3-3 and R3-5 are fixed; **R3-4 is only partly fixed (R4-1 open, gate before enabling any calibrator).** **Git:** 12 commits on `master` (head 54aae28), tags `v0.1-phase4-baseline` (208713e) and `v0.2-r3-blockers-fixed` (0435d99); the backup branch `backup/pre-author-rewrite` holds the pre-rewrite history.
 
 ---
 
@@ -47,6 +47,7 @@ This file merges what used to be three documents: the plan (`adaptive_object_det
 | T-1 | **Choose a real primary detector** and write a crop-capable `Detector` adapter that reports a weights `artifact_digest` and CUDA-event `gpu_ms` (use `embedder.cuda_timer`). Use an open-vocabulary detector if classes must work without training. | Shadow mode only replays precomputed boxes; SAHI is unavailable with `PrecomputedDetector`. | Real shadow runs, SAHI, B-5, Phase 6 |
 | T-2 | **Build the human-checked sample** across class, domain, resolution, object size, crowding, positives/negatives and low similarity. Split it into calibration / development / frozen by source or near-duplicate group, then lock the frozen set (`evaluation.lock_frozen_set`). | Every Phase 5 card needs it. | B-2 … B-7 |
 | T-3 | **Independent review** (a human or Codex) of `pipeline._candidates`, `_verify`, `_apply` and `policy.route`. | The same model family wrote and reviewed the code. | Trust in routing |
+| T-5 | **R4-1 (Medium, gate before any calibrator is enabled):** `scoring.stage_a` checks raw scorer coverage but not the per-class probabilities from `calibrator.calibrate(raw)`. A calibrator returning one class plus `any_p=0.02` gives `calibrated` + `low` with an omitted class. Require complete, finite, in-range per-class output and `P(any) >= max(P(class))`, else mark relevance unavailable/unknown. Tests: missing class output, inconsistent aggregate. | A low-band zero-box route could miss an uncalibrated class. | B-2 |
 | T-4 | **Stage A gaps:** add a compression indicator, and a domain-distance indicator when a reference distribution exists (`StageA.domain_distance` exists but is never filled). | The spec's Stage A list is incomplete. | Domain-shift audit sampling (spec rule 7) |
 
 ## Backlog — blocked
@@ -97,8 +98,8 @@ This file merges what used to be three documents: the plan (`adaptive_object_det
 | F-26 | R3-1: export and report use only the current run's records | 4 | f2dd581 |
 | F-27 | R3-2: cross-class conflicts stay in review even on VLM `absent` | 4 | cd33250 |
 | F-28 | R3-3: VLM calls are **at-most-once** on resume; an interrupted request becomes `uncertain`/review and is not re-sent — **behavior change** | 4 | f530f98 |
-| F-29 | R3-4: incomplete calibrated relevance output never gates a low band | 2 | 5cbbc48 |
-| F-30 | R3-5: a bare human `complete` cannot clear open findings | 4 | 0435d99 |
+| F-29 | R3-4 (**partial**): a raw scorer missing a task class raises a low band to medium. Incomplete *calibrator* output is not covered, see R4-1 | 2 | 5cbbc48 |
+| F-30 | R3-5: a bare human `complete` cannot clear open findings (open unmatched candidates, unresolved checks and escalation failures block it). Explicit per-finding human adjudication is still absent | 4 | 0435d99 |
 
 Qualifications still open on earlier rows (reviewer §7): F-12 is now covered by F-30. F-13 resume guarantee is now at-most-once for the VLM (F-28). F-14 export mixing is fixed (F-26). **F-15 is utility-level only:** `vad-route shadow` does not accept a split or lock, so production runs do not enforce isolation. Replayed CLIP scores in JSONL carry no scale check (D-5).
 
@@ -122,7 +123,7 @@ Qualifications still open on earlier rows (reviewer §7): F-12 is now covered by
 
 ```bash
 uv venv -p 3.13 && uv pip install -e ".[dev]"            # add ",clip" for the CLIP scorer
-.venv/Scripts/python -m pytest                            # 82 tests, no network / GPU
+.venv/Scripts/python -m pytest                            # 87 tests, no network / GPU
 .venv/Scripts/python -m pytest -m clip                    # live CLIP (local weights)
 .venv/Scripts/python -m pytest -m lmstudio                # live VLM (LM Studio)
 vad-route shadow --config configs/routing/example.yaml --images manifest.jsonl \
