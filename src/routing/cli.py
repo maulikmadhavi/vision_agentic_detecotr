@@ -18,14 +18,14 @@ from service_detector_gdino.client import RemoteDetector
 from service_detector_vlm.openai_service_call import OpenAICompatibleVerifier
 from services_embedding.client import WEMM_TEXT_SCALE, WeMMMCPRelevanceScorer
 
-from .evaluation import route_report
+from .evaluation import lock_frozen_set, route_report
 from .export import export_legacy, export_routed
 from .image_inputs import ManifestEntry, load_image, load_manifest
 from .interfaces import Detector, RelevanceScorer
 from .metrics import LabelError, evaluate, evidence_status, image_results, load_ground_truth
 from .pipeline import RoutingPipeline
 from .replay import PrecomputedDetector, PrecomputedRelevance
-from .sample import group_manifest
+from .sample import SampleError, group_manifest, make_split
 from .store import RouteStore, StoreLockedError, job_lock
 from .schemas import ErrorRecord, RouteRecord, TaskSpec, export_json_schemas
 from .task_config import RoutingConfig, load_config
@@ -48,6 +48,13 @@ def _parser() -> argparse.ArgumentParser:
     g.add_argument("--images", required=True, help="image directory or JSONL manifest")
     g.add_argument("--out", required=True, help="groups JSON to write")
     g.add_argument("--max-hamming", type=int, default=6, help="near-duplicate dHash distance that merges two images")
+    sp = sample_sub.add_parser("split", help="seeded group-wise split; writes a versioned manifest and the frozen lock")
+    sp.add_argument("--config", required=True, help="routing config (for the task's class ids)")
+    sp.add_argument("--groups", required=True, help="groups JSON from `vad-route sample group`")
+    sp.add_argument("--exclusions", required=True, help="exclusions JSON, recorded before the split")
+    sp.add_argument("--labels", required=True, help="ground-truth labels (COCO JSON with vad_* fields)")
+    sp.add_argument("--seed", type=int, required=True)
+    sp.add_argument("--out-dir", required=True, help="new directory for split_manifest.json and frozen_lock.json")
     for name in ("shadow", "legacy"):
         p = sub.add_parser(name)
         p.add_argument("--config", required=True)
@@ -93,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "evaluate":
         return _run_evaluate(parser, args)
     if args.cmd == "sample":
-        return _run_sample(args)
+        return _run_sample(parser, args)
 
     cfg = load_config(args.config)
     out = Path(args.out)
@@ -148,7 +155,9 @@ def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     return 0
 
 
-def _run_sample(args: argparse.Namespace) -> int:
+def _run_sample(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    if args.sample_cmd == "split":
+        return _run_split(parser, args)
     doc = group_manifest(load_manifest(args.images), args.max_hamming)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -157,6 +166,29 @@ def _run_sample(args: argparse.Namespace) -> int:
     to_check = sum(1 for p in doc["pairs"] if p["reason"] == "near_duplicate")
     print(f"{len(doc['images'])} images in {len(groups)} groups; {to_check} near-duplicate pairs to confirm; "
           f"{len(doc['unreadable'])} unreadable; written to {out}")
+    return 0
+
+
+def _run_split(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    out = Path(args.out_dir)
+    if (out / "split_manifest.json").exists() or (out / "frozen_lock.json").exists():
+        parser.error(f"{out} already holds a split; a split is versioned, so write it to a new --out-dir")
+    docs = {name: json.loads(Path(getattr(args, name)).read_text(encoding="utf-8"))
+            for name in ("groups", "exclusions", "labels")}
+    try:
+        manifest, frozen = make_split(docs["groups"], docs["exclusions"], docs["labels"],
+                                      load_config(args.config).task, args.seed)
+    except (SampleError, LabelError) as e:
+        parser.error(str(e))
+    frozen_ids = [i for i, img in manifest["images"].items() if img["split"] == "frozen_eval"]
+    frozen_groups = [g for g, v in manifest["groups"].items() if v["split"] == "frozen_eval"]
+    lock = lock_frozen_set(frozen_ids, frozen_groups, frozen, out / "frozen_lock.json")
+    manifest["frozen_lock_sha256"] = lock["lock_sha256"]
+    (out / "split_manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    for warning in manifest["warnings"]:
+        print(f"warning: {warning}", file=sys.stderr)
+    summary = ", ".join(f"{name} {c['groups']} groups / {c['images']} images" for name, c in manifest["counts"].items())
+    print(f"split written to {out}: {summary}")
     return 0
 
 

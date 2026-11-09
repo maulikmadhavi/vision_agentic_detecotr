@@ -2,6 +2,8 @@
 
 Stage 1: group exact and near-duplicate images so a split never separates them, and load the
 exclusions file that must be recorded before any split.
+Stage 2: a seeded, group-wise split into calibration / development / frozen_eval, stratified by
+positive and negative groups, written as a versioned manifest that pins its input digests.
 
 - Exact copies share a SHA-256 of their bytes.
 - Near-duplicates (resized, recompressed) have 64-bit difference hashes (dHash) at Hamming
@@ -23,7 +25,8 @@ import numpy as np
 from PIL import Image, ImageOps
 
 from .image_inputs import ManifestEntry, load_image
-from .schemas import canonical_json, stable_id
+from .metrics import load_ground_truth
+from .schemas import TaskSpec, canonical_json, stable_id
 
 REVIEW_MARGIN = 4
 EXCLUSION_REASONS = ("illustration", "collage", "screenshot", "duplicate", "license_unclear", "other")
@@ -173,3 +176,106 @@ def load_exclusions(doc: Mapping, image_ids: Collection[str]) -> tuple[Exclusion
 def exclusions_digest(doc: Mapping) -> str:
     """Content digest (independent of formatting and key order) to pin in the split manifest."""
     return hashlib.sha256(canonical_json(doc).encode()).hexdigest()
+
+
+# --------------------------------------------------------------------------- split
+
+FROZEN_FRACTION = 0.3       # of each stratum's groups
+CALIBRATION_FRACTION = 0.5  # of each stratum's tuning groups; the rest is development
+SPLIT_NAMES = ("calibration", "development", "frozen_eval")
+
+
+def _digest(doc: Mapping) -> str:
+    return hashlib.sha256(canonical_json(doc).encode()).hexdigest()
+
+
+def _round(x: float) -> int:
+    return int(x + 0.5)  # half up, not banker's rounding
+
+
+def frozen_label_subset(label_doc: Mapping, image_ids: Collection[str]) -> dict:
+    """The part of the label file that the frozen lock pins: categories, frozen images, their annotations."""
+    wanted = set(image_ids)
+    images = sorted((img for img in label_doc["images"] if img["vad_image_id"] in wanted),
+                    key=lambda img: img["vad_image_id"])
+    keys = {img["id"] for img in images}
+    annotations = sorted((a for a in label_doc["annotations"] if a["image_id"] in keys), key=lambda a: a["id"])
+    return {"categories": label_doc["categories"], "images": images, "annotations": annotations}
+
+
+def make_split(groups_doc: Mapping, exclusions_doc: Mapping, label_doc: Mapping, task: TaskSpec,
+               seed: int) -> tuple[dict, dict]:
+    """Seeded group-wise split; returns the manifest and the frozen label subset to lock.
+
+    Within each stratum (groups with any labelled object vs none), groups are ordered by a
+    seeded hash of their id: about 30% go to frozen_eval, the rest is halved into calibration
+    and development. A non-empty stratum needs at least 3 groups (one per split), otherwise the
+    split is refused rather than padded; an empty stratum is stated in ``warnings``. Excluded
+    images stay in the manifest as ``excluded``.
+    """
+    if groups_doc.get("version") != "groups-v1":
+        raise SampleError("--groups must be a groups-v1 file from `vad-route sample group`")
+    image_group = {i: v["group_id"] for i, v in groups_doc["images"].items()}
+    exclusions = {e.image_id: e for e in load_exclusions(exclusions_doc, image_group)}
+    if missing := sorted(set(groups_doc["unreadable"]) - set(exclusions)):
+        raise SampleError(f"unreadable images must be excluded before the split: {missing[:5]}")
+    ground_truth = load_ground_truth(label_doc, task)
+    if unknown := sorted(set(ground_truth) - set(image_group)):
+        raise SampleError(f"labelled images that are not in the groups file: {unknown[:5]}")
+    included = sorted(i for i in image_group if i not in exclusions)
+    if unlabelled := [i for i in included if i not in ground_truth]:
+        raise SampleError(f"images that are neither labelled nor excluded: {unlabelled[:5]}")
+
+    members: dict[str, list[str]] = {}
+    for image_id in sorted(image_group):
+        members.setdefault(image_group[image_id], []).append(image_id)
+    stratum: dict[str, str | None] = {}
+    for group_id, ids in members.items():
+        kept = [i for i in ids if i in ground_truth and i not in exclusions]
+        stratum[group_id] = None if not kept else (
+            "positive" if any(not b.ignore for i in kept for b in ground_truth[i].boxes) else "negative")
+    split = {g: "excluded" for g, s in stratum.items() if s is None}
+    warnings = []
+    for name in ("positive", "negative"):
+        ordered = sorted((g for g, s in stratum.items() if s == name),
+                         key=lambda g: hashlib.sha256(f"{seed}|{g}".encode()).hexdigest())
+        if not ordered:
+            warnings.append(f"no {name} groups: no split contains {name} images")
+            continue
+        if len(ordered) < 3:
+            raise SampleError(f"the {name} stratum has {len(ordered)} groups; it needs at least 3 (one each for "
+                              "calibration, development and frozen_eval). Add groups or change the sample; "
+                              "the split does not pad")
+        n_frozen = max(1, _round(FROZEN_FRACTION * len(ordered)))
+        n_calibration = max(1, _round(CALIBRATION_FRACTION * (len(ordered) - n_frozen)))
+        for k, group_id in enumerate(ordered):
+            split[group_id] = ("frozen_eval" if k < n_frozen else
+                               "calibration" if k < n_frozen + n_calibration else "development")
+
+    images = {}
+    for image_id in sorted(image_group):
+        group_id, excl = image_group[image_id], exclusions.get(image_id)
+        images[image_id] = {
+            "group_id": group_id,
+            "split": "excluded" if excl else split[group_id],
+            "stratum": None if excl else stratum[group_id],
+            "exclusion": {"reason": excl.reason, "out_of_domain_set": excl.out_of_domain_set} if excl else None,
+        }
+    counts = {name: {"groups": 0, "images": 0, "positive_groups": 0, "negative_groups": 0}
+              for name in (*SPLIT_NAMES, "excluded")}
+    for group_id, name in split.items():
+        counts[name]["groups"] += 1
+        if stratum[group_id]:
+            counts[name][f"{stratum[group_id]}_groups"] += 1
+    for img in images.values():
+        counts[img["split"]]["images"] += 1
+    manifest = {
+        "version": "split-v1", "seed": seed,
+        "fractions": {"frozen_eval": FROZEN_FRACTION, "calibration_of_tuning": CALIBRATION_FRACTION},
+        "inputs": {"groups_sha256": _digest(groups_doc), "exclusions_sha256": exclusions_digest(exclusions_doc),
+                   "labels_sha256": _digest(label_doc)},
+        "groups": {g: {"split": split[g], "stratum": stratum[g], "images": members[g]} for g in sorted(members)},
+        "images": images, "counts": counts, "warnings": warnings,
+    }
+    frozen_ids = [i for i, img in images.items() if img["split"] == "frozen_eval"]
+    return manifest, frozen_label_subset(label_doc, frozen_ids)
