@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+runs/
+.pytest_cache/
+*.sqlite
+*.safetensors
+*.pt
+*.pth
+*.onnx
