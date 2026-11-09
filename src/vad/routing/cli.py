@@ -17,7 +17,7 @@ from .adapters import LMStudioVLM, PrecomputedDetector, PrecomputedRelevance
 from .evaluation import route_report
 from .export import export_legacy, export_routed
 from .pipeline import RouteStore, RoutingPipeline, StoreLockedError, job_lock, load_image, load_manifest
-from .schemas import export_json_schemas
+from .schemas import ErrorRecord, RouteRecord, export_json_schemas
 from .task_config import load_config
 
 
@@ -91,14 +91,17 @@ def main(argv: list[str] | None = None) -> int:
         with job_lock(out):
             store = RouteStore(out / "routes.sqlite")
             pipe = RoutingPipeline(cfg, primary, store, secondary=secondary, relevance=relevance, vlm=vlm)
-            pipe.run(entries)
-            records = store.records()
+            # Export only this run's results: a reused --out store may hold records from
+            # earlier runs (other manifests, tasks or configs) that must not leak in.
+            results = pipe.run(entries)
+            records = sorted((r for r in results if isinstance(r, RouteRecord)), key=lambda r: r.image.id)
+            errors = [r for r in results if isinstance(r, ErrorRecord)]
             export_routed(records, cfg.task, out / "annotations.json")
             with open(out / "route_trace.jsonl", "w", encoding="utf-8") as f:
                 for r in records:
                     f.write(r.model_dump_json() + "\n")
             report = route_report(records)
-            report["errors"] = [e.model_dump(mode="json") for e in store.errors()]
+            report["errors"] = [e.model_dump(mode="json") for e in errors]
             (out / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     except StoreLockedError as e:
         print(f"error: {e}", file=sys.stderr)
