@@ -23,10 +23,14 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+import numpy as np
+
 from .matching import iou
 from .schemas import TaskSpec
 
 Box = tuple[float, float, float, float]
+IOU_THRESHOLDS = tuple(round(0.5 + 0.05 * i, 2) for i in range(10))  # 0.50:0.05:0.95
+_RECALL_POINTS = np.linspace(0.0, 1.0, 101)
 
 
 class LabelError(ValueError):
@@ -139,3 +143,66 @@ def match_image(predictions: Sequence[Prediction], gt: GroundTruthImage, iou_thr
             fp.append(i)
     fn = [j for j, box in enumerate(gt.boxes) if not box.ignore and j not in matched]
     return ImageMatch(tp=tuple(sorted(tp)), fp=tuple(sorted(fp)), fn=tuple(fn), ignored=tuple(sorted(ignored)))
+
+
+def average_precision(predictions: Mapping[str, Sequence[Prediction]], ground_truth: Mapping[str, GroundTruthImage],
+                      class_id: str, iou_threshold: float) -> float | None:
+    """COCO-style 101-point interpolated AP for one class at one IoU threshold; None without ground truth.
+
+    Detections are matched per image (highest score first, see :func:`match_image`), pooled
+    across images in score order, and turned into a monotone precision envelope sampled at
+    recall 0.00, 0.01, ..., 1.00. Detections on ignore boxes take no part. Unlike COCO there is
+    no per-image cap of 100 detections, and an ignore box uses ordinary IoU (COCO's crowd boxes
+    use intersection over the detection's area).
+    """
+    pooled: list[tuple[float, bool]] = []
+    n_boxes = 0
+    for image_id in sorted(ground_truth):
+        gt = ground_truth[image_id]
+        n_boxes += sum(1 for box in gt.boxes if box.class_id == class_id and not box.ignore)
+        if any(p.score is None for p in predictions.get(image_id, ()) if p.class_id == class_id):
+            raise LabelError(f"image {image_id!r} has a prediction without a score; AP needs scored detections")
+        preds = sorted((p for p in predictions.get(image_id, ()) if p.class_id == class_id), key=lambda p: -p.score)
+        match = match_image(preds, gt, iou_threshold)
+        true_positives, neutral = {i for i, _ in match.tp}, set(match.ignored)
+        pooled += [(p.score, i in true_positives) for i, p in enumerate(preds) if i not in neutral]
+    if n_boxes == 0:
+        return None
+    pooled.sort(key=lambda item: -item[0])  # stable: ties keep image order, then within-image order
+    hits = np.array([hit for _, hit in pooled], dtype=bool)
+    tp, fp = np.cumsum(hits), np.cumsum(~hits)
+    recall = tp / n_boxes
+    precision = tp / np.maximum(tp + fp, 1)
+    precision = np.maximum.accumulate(precision[::-1])[::-1]  # best precision at this recall or higher
+    at = np.searchsorted(recall, _RECALL_POINTS, side="left")
+    return float(np.mean([precision[i] if i < len(precision) else 0.0 for i in at]))
+
+
+def mean_average_precision(predictions: Mapping[str, Sequence[Prediction]],
+                           ground_truth: Mapping[str, GroundTruthImage], class_ids: Sequence[str]) -> dict:
+    """mAP50-95 and mAP50 over the classes that have ground truth (classes without any are listed).
+
+    Needs scored detector predictions; accepted (score-free) annotations are evaluated by
+    precision and recall instead.
+    """
+    if unknown := sorted(set(predictions) - set(ground_truth)):
+        raise LabelError(f"predictions for images not in the ground truth: {unknown[:5]}")
+    for image_id, preds in predictions.items():
+        if any(p.score is None for p in preds):
+            raise LabelError(f"image {image_id!r} has a prediction without a score; mAP needs scored detections")
+        if unknown := sorted({p.class_id for p in preds} - set(class_ids)):
+            raise LabelError(f"predictions of classes not in the task: {unknown}")
+    per_class: dict[str, dict[str, float]] = {}
+    without: list[str] = []
+    for class_id in class_ids:
+        aps = [average_precision(predictions, ground_truth, class_id, t) for t in IOU_THRESHOLDS]
+        if aps[0] is None:
+            without.append(class_id)
+            continue
+        per_class[class_id] = {"ap50_95": float(np.mean(aps)), "ap50": aps[0]}
+    return {
+        "map50_95": float(np.mean([v["ap50_95"] for v in per_class.values()])) if per_class else None,
+        "map50": float(np.mean([v["ap50"] for v in per_class.values()])) if per_class else None,
+        "per_class": per_class, "classes_without_ground_truth": without,
+        "iou_thresholds": list(IOU_THRESHOLDS),
+    }

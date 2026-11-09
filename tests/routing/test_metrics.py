@@ -148,3 +148,94 @@ def test_every_detection_on_a_negative_image_is_a_false_positive():
 def test_prediction_of_a_class_outside_the_task_is_rejected():
     with pytest.raises(LabelError, match="dog"):
         match_image([Prediction("dog", (1, 1, 9, 9), 0.9)], _gt(A_BOX), class_ids=task().class_ids)
+
+
+# --- A3 stage 2: AP and mAP50-95 (hand-computed values) ----------------------------------------
+
+from routing.metrics import IOU_THRESHOLDS, average_precision, mean_average_precision  # noqa: E402
+
+IMG = {"width": 200, "height": 200, "vad_exhaustive": True}
+
+
+def _set(images, annotations):
+    doc = {"images": [{"id": i + 1, "vad_image_id": name, **IMG} for i, name in enumerate(images)],
+           "categories": [dict(c) for c in CATS], "annotations": []}
+    ids = {name: i + 1 for i, name in enumerate(images)}
+    for k, (name, cat, bbox, extra) in enumerate(annotations):
+        doc["annotations"].append({"id": k + 1, "image_id": ids[name], "category_id": cat, "bbox": bbox, **extra})
+    return load_ground_truth(doc, task())
+
+
+def _p(cls, xyxy, score):
+    return Prediction(cls, xyxy, score)
+
+
+# Class A: two boxes, detections in score order TP, FP, TP -> AP = (51 + 50 * 2/3) / 101 = 253/303.
+GT_A = [("i1", 1, [0, 0, 50, 50], {}), ("i2", 1, [100, 100, 50, 50], {})]
+PRED_A = {"i1": [_p(CLASS_A, (0, 0, 50, 50), 0.9), _p(CLASS_A, (150, 0, 190, 40), 0.8)],
+          "i2": [_p(CLASS_A, (100, 100, 150, 150), 0.7)]}
+
+
+def test_ap_tp_fp_tp_over_two_boxes_is_253_over_303():
+    gt = _set(["i1", "i2"], GT_A)
+    assert average_precision(PRED_A, gt, CLASS_A, 0.5) == pytest.approx(253 / 303, abs=1e-12)
+
+
+def test_ap_when_the_top_detection_is_wrong_uses_the_precision_envelope():
+    # Score order FP, TP, TP over two boxes: precision 0, 1/2, 2/3 -> envelope 2/3 at every recall -> AP = 2/3.
+    gt = _set(["i1", "i2"], GT_A)
+    preds = {"i1": [_p(CLASS_A, (150, 0, 190, 40), 0.9), _p(CLASS_A, (0, 0, 50, 50), 0.8)],
+             "i2": [_p(CLASS_A, (100, 100, 150, 150), 0.7)]}
+    assert average_precision(preds, gt, CLASS_A, 0.5) == pytest.approx(2 / 3, abs=1e-12)
+
+
+def test_ap_with_an_undetected_box_is_56_over_101():
+    # A third box nobody detected: recall steps 1/3, 1/3, 2/3 -> (34 * 1 + 33 * 2/3) / 101.
+    gt = _set(["i1", "i2", "i3"], GT_A + [("i3", 1, [10, 10, 30, 30], {})])
+    assert average_precision(PRED_A, gt, CLASS_A, 0.5) == pytest.approx(56 / 101, abs=1e-12)
+
+
+def test_ap_ignores_a_detection_on_an_ignore_box():
+    gt = _set(["i1", "i2", "i4"], GT_A + [("i4", 1, [20, 20, 40, 40], {"ignore": True})])
+    preds = {**PRED_A, "i4": [_p(CLASS_A, (20, 20, 60, 60), 0.99)]}  # top score, neutral
+    assert average_precision(preds, gt, CLASS_A, 0.5) == pytest.approx(253 / 303, abs=1e-12)
+
+
+def test_ap_is_zero_without_detections_and_none_without_ground_truth():
+    gt = _set(["i1", "i2"], GT_A)
+    assert average_precision({}, gt, CLASS_A, 0.5) == 0.0
+    assert average_precision(PRED_A, gt, CLASS_B, 0.5) is None  # no class-B box anywhere
+
+
+def test_iou_thresholds_are_point_50_to_point_95():
+    assert IOU_THRESHOLDS == (0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95)
+
+
+def test_map_averages_classes_with_ground_truth_over_ten_thresholds():
+    # Class B: one box, one detection at IoU 0.72 -> found at 0.50-0.70 (5 thresholds), missed above.
+    gt = _set(["i1", "i2", "b"], GT_A + [("b", 2, [0, 0, 100, 100], {})])
+    preds = {**PRED_A, "b": [_p(CLASS_B, (0, 0, 100, 72), 0.6)]}
+    out = mean_average_precision(preds, gt, task().class_ids)
+    assert out["per_class"][CLASS_A] == {"ap50_95": pytest.approx(253 / 303), "ap50": pytest.approx(253 / 303)}
+    assert out["per_class"][CLASS_B] == {"ap50_95": pytest.approx(0.5), "ap50": pytest.approx(1.0)}
+    assert out["map50_95"] == pytest.approx((253 / 303 + 0.5) / 2)
+    assert out["map50"] == pytest.approx((253 / 303 + 1.0) / 2)
+    assert out["classes_without_ground_truth"] == []
+
+
+def test_map_lists_and_skips_a_class_without_ground_truth():
+    gt = _set(["i1", "i2"], GT_A)
+    out = mean_average_precision({**PRED_A, "i1": PRED_A["i1"] + [_p(CLASS_B, (0, 0, 9, 9), 0.5)]}, gt,
+                                 task().class_ids)
+    assert out["classes_without_ground_truth"] == [CLASS_B] and CLASS_B not in out["per_class"]
+    assert out["map50_95"] == pytest.approx(253 / 303)
+
+
+def test_map_refuses_unscored_predictions_and_unknown_images():
+    gt = _set(["i1", "i2"], GT_A)
+    with pytest.raises(LabelError, match="score"):
+        average_precision({"i1": [_p(CLASS_A, (0, 0, 50, 50), None)]}, gt, CLASS_A, 0.5)
+    with pytest.raises(LabelError, match="score"):
+        mean_average_precision({"i1": [_p(CLASS_A, (0, 0, 50, 50), None)]}, gt, task().class_ids)
+    with pytest.raises(LabelError, match="not in the ground truth"):
+        mean_average_precision({"zz": [_p(CLASS_A, (0, 0, 50, 50), 0.5)]}, gt, task().class_ids)
