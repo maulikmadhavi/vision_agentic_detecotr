@@ -2027,7 +2027,7 @@ packages:
 - pypi: ../../..
   name: vad
   version: 0.1.0
-  sha256: 8790014f452005b35a7b53122adc55a4a9593f9e99753ef29a289c9c4e024f7a
+  sha256: 89740873376a844a0bd17bfb4ef6e2e8554b18265475e7a95b47f2c0ea12ad1d
   requires_dist:
   - pydantic>=2.7,<3
   - numpy>=1.26
@@ -2037,6 +2037,7 @@ packages:
   - open-clip-torch>=4.2,<5 ; extra == 'clip'
   - torch>=2.11,<3 ; extra == 'clip'
   - pytest>=8 ; extra == 'dev'
+  - fastapi>=0.115 ; extra == 'dev'
   requires_python: '>=3.11'
 - conda: https://conda.anaconda.org/conda-forge/win-64/vc-14.5-ha367084_42.conda
   sha256: 0598ca1ce913618cff9bd90391bcf75cd9edb22057c85dd6784dd762b7a888e2
