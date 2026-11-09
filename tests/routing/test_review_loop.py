@@ -294,10 +294,11 @@ def test_cli_findings_writes_one_line_per_open_finding(tmp_path):
     assert {f["record_id"] for f in lines} == {rec.record_id}
 
 
-def test_cli_apply_tags_frozen_images_and_warns(tmp_path, capsys):
+@pytest.mark.parametrize("version", ["split-v1", "split-v2"])
+def test_cli_apply_tags_frozen_images_and_warns(tmp_path, capsys, version):
     rec, trace, cfg, log = _cli_files(tmp_path, _full_review)
     split = tmp_path / "split.json"
-    split.write_text(json.dumps({"version": "split-v1", "images": {rec.image.id: {"split": "frozen_eval"}}}),
+    split.write_text(json.dumps({"version": version, "images": {rec.image.id: {"split": "frozen_eval"}}}),
                      encoding="utf-8")
     assert _apply(cfg, trace, log, tmp_path / "out", "--split-manifest", str(split)) == 0
     doc = json.loads((tmp_path / "out" / "annotations.json").read_text(encoding="utf-8"))

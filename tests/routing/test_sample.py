@@ -114,6 +114,9 @@ def test_cli_sample_group_writes_groups_pairs_and_unreadable(images, tmp_path):
     assert doc["max_hamming"] == 6 and doc["unreadable"] == ["broken"]
     reasons = {(p["a"], p["b"]): p["reason"] for p in doc["pairs"]}
     assert reasons[("a", "a_bytes")] == "exact" and reasons[("a", "a_q40")] == "near_duplicate"
+    # R5-2: each readable image carries its decoded size (as in ImageRef); an unreadable one carries none
+    assert doc["version"] == "groups-v2" and (doc["images"]["a"]["width"], doc["images"]["a"]["height"]) == (256, 192)
+    assert (doc["images"]["a_half"]["width"], doc["images"]["broken"]["width"]) == (128, None)
 
 
 # --- exclusions ---------------------------------------------------------------------------------

@@ -19,7 +19,9 @@ from service_detector_vlm.openai_service_call import OpenAICompatibleVerifier
 from services_embedding.client import WEMM_TEXT_SCALE, WeMMMCPRelevanceScorer
 
 from .calibration import CalibrationError, FittedRelevanceCalibrator, fit_relevance
-from .evaluation import IsolationError, load_frozen, lock_frozen_set, route_report
+from .evaluation import (
+    CONTENT_FIELDS, IsolationError, check_image_content, load_frozen, lock_frozen_set, route_report,
+)
 from .export import export_legacy, export_reviewed, export_routed
 from .image_inputs import ManifestEntry, image_id, load_image, load_manifest
 from .interfaces import Detector, RelevanceScorer
@@ -189,6 +191,8 @@ def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         parser.error("--split-manifest and --frozen-lock go together")
     split = {"status": "unverified: no --split-manifest/--frozen-lock; every labelled image is scored, "
                        "whatever its split"}
+    lines = Path(args.trace).read_text(encoding="utf-8").splitlines()
+    records = [RouteRecord.model_validate_json(line) for line in lines if line.strip()]
     if args.split_manifest:
         manifest = json.loads(Path(args.split_manifest).read_text(encoding="utf-8"))
         lock = json.loads(Path(args.frozen_lock).read_text(encoding="utf-8"))
@@ -200,9 +204,20 @@ def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         except IsolationError as e:
             parser.error(f"the frozen labels do not verify against --frozen-lock: {e}")
         ground_truth = {i: ground_truth[i] for i in frozen_ids}
-        split = {"status": "verified frozen_eval", "frozen_images": len(frozen_ids), "lock_sha256": lock["lock_sha256"]}
-    lines = Path(args.trace).read_text(encoding="utf-8").splitlines()
-    records = [RouteRecord.model_validate_json(line) for line in lines if line.strip()]
+        split = {"frozen_images": len(frozen_ids), "lock_sha256": lock["lock_sha256"]}
+        if "images" not in lock:  # a lock from before image hashes: labels verified, image content not
+            split["status"] = ("unverified: the frozen labels match --frozen-lock, but the lock predates image "
+                               "hashes, so image content is not checked; re-lock (frozen-lock-v2) to bind it")
+        else:
+            if any({k: manifest["images"][i].get(k) for k in CONTENT_FIELDS} != lock["images"][i] for i in frozen_ids):
+                parser.error("--frozen-lock does not belong to --split-manifest (frozen image content differs)")
+            try:
+                check_image_content(lock["images"], [r.image for r in records if r.image.id in lock["images"]],
+                                    "--frozen-lock")
+            except IsolationError as e:
+                parser.error(f"a frozen result was routed on other image content: {e}")
+            split = {"status": "verified frozen_eval", **split,
+                     "image_content": "bound: each frozen result matches the lock's sha256 and size"}
     metrics = {"evidence_status": evidence_status(label_doc), "split": split,
                **evaluate(ground_truth, task.class_ids, image_results(records), args.iou),
                "cost": route_report(records)}
@@ -281,8 +296,8 @@ def _run_human_review(parser: argparse.ArgumentParser, args: argparse.Namespace)
     splits = None
     if args.split_manifest:
         manifest = json.loads(Path(args.split_manifest).read_text(encoding="utf-8"))
-        if manifest.get("version") != "split-v1":
-            parser.error("--split-manifest must be a split-v1 file from `vad-route sample split`")
+        if manifest.get("version") not in ("split-v1", "split-v2"):
+            parser.error("--split-manifest must be a split manifest from `vad-route sample split`")
         splits = {i: img["split"] for i, img in manifest["images"].items()}
         if missing := sorted(r.image.id for r in records if r.image.id not in splits):
             parser.error(f"images not in --split-manifest: {missing[:5]}")
@@ -342,7 +357,8 @@ def _run_split(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int
         parser.error(str(e))
     frozen_ids = [i for i, img in manifest["images"].items() if img["split"] == "frozen_eval"]
     frozen_groups = [g for g, v in manifest["groups"].items() if v["split"] == "frozen_eval"]
-    lock = lock_frozen_set(frozen_ids, frozen_groups, frozen, out / "frozen_lock.json")
+    lock = lock_frozen_set(frozen_ids, frozen_groups, frozen, out / "frozen_lock.json",
+                           content={i: manifest["images"][i] for i in frozen_ids})
     manifest["frozen_lock_sha256"] = lock["lock_sha256"]
     (out / "split_manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     for warning in manifest["warnings"]:
@@ -390,8 +406,8 @@ def _run_shadow(parser: argparse.ArgumentParser, args: argparse.Namespace, cfg: 
     splits = None
     if args.split_manifest:
         manifest = json.loads(Path(args.split_manifest).read_text(encoding="utf-8"))
-        if manifest.get("version") != "split-v1":
-            parser.error("--split-manifest must be a split-v1 file from `vad-route sample split`")
+        if manifest.get("version") not in ("split-v1", "split-v2"):
+            parser.error("--split-manifest must be a split manifest from `vad-route sample split`")
         splits = {i: img["split"] for i, img in manifest["images"].items()}
         ids = []
         for entry in entries:

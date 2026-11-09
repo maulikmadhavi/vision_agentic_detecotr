@@ -2,26 +2,37 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import shutil
 
 import pytest
 import yaml
+from PIL import Image
 
 from routing import cli
 from routing.evaluation import IsolationError, assert_split_allows, lock_frozen_set
+from routing.image_inputs import ManifestEntry
+from routing.pipeline import RoutingPipeline
 from routing.sample import make_split
+from routing.schemas import canonical_json
+from routing.store import RouteStore
 
-from .helpers import config, make_fixture, task
-from .test_split import _inputs
+from .helpers import ScriptedDetector, config, make_fixture, task
+from .test_split import _inputs, content_of
 
 
-def _split_files(tmp_path, labels=None):
+def _split_files(tmp_path, labels=None, content=None):
+    """``content`` ({image id: {sha256, width, height}}) replaces groups-file entries, as real files would give."""
     groups, exclusions, base_labels = _inputs()
     labels = labels or base_labels
+    for image_id, fields in (content or {}).items():
+        groups["images"][image_id].update(fields)
     manifest, frozen = make_split(groups, exclusions, labels, task(), seed=11)
     frozen_ids = [i for i, img in manifest["images"].items() if img["split"] == "frozen_eval"]
     frozen_groups = [g for g, v in manifest["groups"].items() if v["split"] == "frozen_eval"]
-    lock = lock_frozen_set(frozen_ids, frozen_groups, frozen, tmp_path / "frozen_lock.json")
+    lock = lock_frozen_set(frozen_ids, frozen_groups, frozen, tmp_path / "frozen_lock.json",
+                           content=content_of(manifest, frozen_ids))
     manifest["frozen_lock_sha256"] = lock["lock_sha256"]
     paths = {"manifest": tmp_path / "split_manifest.json", "lock": tmp_path / "frozen_lock.json",
              "labels": tmp_path / "labels.json", "trace": tmp_path / "route_trace.jsonl",
@@ -48,7 +59,8 @@ def test_evaluate_with_a_verified_lock_scores_only_the_frozen_images(tmp_path):
     doc = json.loads(out.read_text(encoding="utf-8"))
     assert doc["images"]["labelled"] == len(frozen_ids) == 10
     assert doc["split"] == {"status": "verified frozen_eval", "frozen_images": 10,
-                            "lock_sha256": manifest["frozen_lock_sha256"]}
+                            "lock_sha256": manifest["frozen_lock_sha256"],
+                            "image_content": "bound: each frozen result matches the lock's sha256 and size"}
 
 
 def test_evaluate_without_a_split_says_it_is_unverified(tmp_path):
@@ -78,6 +90,94 @@ def test_evaluate_refuses_a_lock_that_belongs_to_another_split(tmp_path, capsys)
     assert exc.value.code == 2 and "does not belong" in capsys.readouterr().err
 
 
+# --- R5-2: frozen results are bound to the frozen image content ----------------------------------
+
+
+def _frozen_image_files(tmp_path):
+    """A white 100x100 file for the first frozen image; the split and lock are made with its real sha256."""
+    _, _, _, frozen_ids = _split_files(tmp_path / "probe")
+    target = sorted(frozen_ids)[0]
+    white = tmp_path / "white.png"
+    Image.new("RGB", (100, 100), (255, 255, 255)).save(white)
+    content = {target: {"sha256": hashlib.sha256(white.read_bytes()).hexdigest(), "width": 100, "height": 100}}
+    paths, manifest, labels, frozen_ids = _split_files(tmp_path, content=content)
+    return paths, target, white
+
+
+def _trace(paths, image_path, image_id):
+    record = RoutingPipeline(config(), ScriptedDetector({}), RouteStore(":memory:")).process(
+        ManifestEntry(str(image_path), image_id=image_id))
+    paths["trace"].write_text(record.model_dump_json() + "\n", encoding="utf-8")
+
+
+def _evaluate_frozen(paths, tmp_path):
+    return _evaluate(paths, tmp_path / "m.json", "--split-manifest", str(paths["manifest"]),
+                     "--frozen-lock", str(paths["lock"]))
+
+
+def test_a_frozen_result_for_the_locked_image_bytes_verifies(tmp_path):
+    paths, target, white = _frozen_image_files(tmp_path)
+    _trace(paths, white, target)
+    assert _evaluate_frozen(paths, tmp_path) == 0
+    assert json.loads((tmp_path / "m.json").read_text(encoding="utf-8"))["split"]["status"] == "verified frozen_eval"
+
+
+def test_identical_bytes_at_another_path_still_verify(tmp_path):
+    paths, target, white = _frozen_image_files(tmp_path)
+    moved = tmp_path / "elsewhere" / "copy.png"
+    moved.parent.mkdir()
+    shutil.copy(white, moved)
+    _trace(paths, moved, target)
+    assert _evaluate_frozen(paths, tmp_path) == 0
+
+
+def test_a_replaced_frozen_image_with_the_same_id_and_size_is_refused(tmp_path, capsys):
+    """The reviewer's case: white replaced by red, same 100x100 size, same image id."""
+    paths, target, _ = _frozen_image_files(tmp_path)
+    red = tmp_path / "red.png"
+    Image.new("RGB", (100, 100), (255, 0, 0)).save(red)
+    _trace(paths, red, target)
+    with pytest.raises(SystemExit) as exc:
+        _evaluate_frozen(paths, tmp_path)
+    assert exc.value.code == 2 and f"{target}" in capsys.readouterr().err and not (tmp_path / "m.json").exists()
+
+
+def test_a_frozen_result_of_another_size_is_refused_even_with_the_same_sha256(tmp_path, capsys):
+    _, _, _, frozen_ids = _split_files(tmp_path / "probe")
+    target = sorted(frozen_ids)[0]
+    tall = tmp_path / "tall.png"
+    Image.new("RGB", (100, 120), (255, 255, 255)).save(tall)
+    sha = hashlib.sha256(tall.read_bytes()).hexdigest()  # the lock claims these bytes at 100x100
+    paths, *_ = _split_files(tmp_path, content={target: {"sha256": sha, "width": 100, "height": 100}})
+    _trace(paths, tall, target)
+    with pytest.raises(SystemExit) as exc:
+        _evaluate_frozen(paths, tmp_path)
+    assert exc.value.code == 2 and "height" in capsys.readouterr().err
+
+
+def test_a_manifest_whose_image_content_differs_from_the_lock_is_refused(tmp_path, capsys):
+    paths, manifest, *_ = _split_files(tmp_path)
+    frozen = next(i for i, img in manifest["images"].items() if img["split"] == "frozen_eval")
+    manifest["images"][frozen]["sha256"] = "0" * 64
+    paths["manifest"].write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        _evaluate_frozen(paths, tmp_path)
+    assert exc.value.code == 2 and "does not belong" in capsys.readouterr().err
+
+
+def test_an_old_lock_without_image_hashes_is_reported_unverified(tmp_path):
+    paths, manifest, *_ = _split_files(tmp_path)
+    lock = json.loads(paths["lock"].read_text(encoding="utf-8"))
+    old = {k: lock[k] for k in ("image_ids", "group_ids", "annotations_sha256")}
+    old["lock_sha256"] = hashlib.sha256(canonical_json(old).encode()).hexdigest()
+    paths["lock"].write_text(json.dumps(old), encoding="utf-8")
+    paths["manifest"].write_text(json.dumps({**manifest, "frozen_lock_sha256": old["lock_sha256"]}), encoding="utf-8")
+    assert _evaluate_frozen(paths, tmp_path) == 0
+    status = json.loads((tmp_path / "m.json").read_text(encoding="utf-8"))["split"]["status"]
+    assert status.startswith("unverified") and "image content" in status and "frozen-lock-v2" in status
+    assert "version" not in json.loads(paths["lock"].read_text(encoding="utf-8"))  # never upgraded
+
+
 @pytest.mark.parametrize("flag", ["--split-manifest", "--frozen-lock"])
 def test_evaluate_needs_both_split_flags_or_neither(tmp_path, capsys, flag):
     paths, *_ = _split_files(tmp_path)
@@ -90,9 +190,9 @@ def test_evaluate_needs_both_split_flags_or_neither(tmp_path, capsys, flag):
 # --- (2) shadow tags the export with the split ---------------------------------------------------
 
 
-def _shadow_split(tmp_path, splits):
+def _shadow_split(tmp_path, splits, version="split-v1"):
     fx = make_fixture(tmp_path / "fx")
-    manifest = {"version": "split-v1", "images": {i: {"split": s} for i, s in splits.items()}}
+    manifest = {"version": version, "images": {i: {"split": s} for i, s in splits.items()}}
     path = tmp_path / "split.json"
     path.write_text(json.dumps(manifest), encoding="utf-8")
     args = ["shadow", "--config", str(fx["config"]), "--images", str(fx["manifest"]),
@@ -101,9 +201,10 @@ def _shadow_split(tmp_path, splits):
     return args
 
 
-def test_shadow_export_tags_each_image_with_its_split(tmp_path):
+@pytest.mark.parametrize("version", ["split-v1", "split-v2"])
+def test_shadow_export_tags_each_image_with_its_split(tmp_path, version):
     splits = {"easy": "calibration", "zero": "development", "small": "frozen_eval", "corrupt": "excluded"}
-    assert cli.main(_shadow_split(tmp_path, splits)) == 0
+    assert cli.main(_shadow_split(tmp_path, splits, version)) == 0
     doc = json.loads((tmp_path / "out" / "annotations.json").read_text(encoding="utf-8"))
     assert {img["vad_image_id"]: img["vad_split"] for img in doc["images"]} == {
         "easy": "calibration", "zero": "development", "small": "frozen_eval"}

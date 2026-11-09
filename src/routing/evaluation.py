@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from .schemas import RouteRecord, VerificationResult, canonical_json
+from .schemas import ImageRef, RouteRecord, VerificationResult, canonical_json
 
 SPLITS = ("train", "calibration", "development", "frozen_eval")
 
@@ -76,28 +76,52 @@ def _digest(obj) -> str:
     return hashlib.sha256(canonical_json(obj).encode()).hexdigest()
 
 
+LOCK_VERSION = "frozen-lock-v2"
+_LOCK_V1_FIELDS = ("image_ids", "group_ids", "annotations_sha256")
+_LOCK_V2_FIELDS = ("version", *_LOCK_V1_FIELDS, "images")
+CONTENT_FIELDS = ("sha256", "width", "height")
+
+
 def lock_frozen_set(image_ids: Sequence[str], group_ids: Sequence[str], annotations: Mapping,
-                    lock_path: str | Path) -> dict:
-    """Write a lock file pinning frozen image IDs, groups and annotation content. Refuses to overwrite."""
+                    lock_path: str | Path, *, content: Mapping[str, Mapping]) -> dict:
+    """Write a lock pinning frozen image IDs, groups, annotation content and each frozen image's
+    sha256 and size (``content``: image id -> {sha256, width, height}). Refuses to overwrite."""
     p = Path(lock_path)
     if p.exists():
         raise FileExistsError(f"frozen lock already exists: {p}; create a new versioned lock instead")
-    lock = {"image_ids": sorted(image_ids), "group_ids": sorted(set(group_ids)),
-            "annotations_sha256": _digest(annotations)}
-    lock["lock_sha256"] = _digest({k: lock[k] for k in ("image_ids", "group_ids", "annotations_sha256")})
+    lock = {"version": LOCK_VERSION, "image_ids": sorted(image_ids), "group_ids": sorted(set(group_ids)),
+            "annotations_sha256": _digest(annotations),
+            "images": {i: {k: content[i][k] for k in CONTENT_FIELDS} for i in sorted(image_ids)}}
+    lock["lock_sha256"] = _digest({k: lock[k] for k in _LOCK_V2_FIELDS})
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(lock, indent=2), encoding="utf-8")
     return lock
 
 
 def load_frozen(lock_path: str | Path, annotations: Mapping) -> dict:
-    """Load and verify the frozen set; raises if the lock or the annotations have changed."""
+    """Load and verify the frozen set; raises if the lock or the annotations have changed.
+
+    A lock without ``version`` predates image hashes: it still verifies (over its own fields) and is
+    returned as it is, never upgraded; callers report its image content as unverified.
+    """
     lock = json.loads(Path(lock_path).read_text(encoding="utf-8"))
-    if lock["lock_sha256"] != _digest({k: lock[k] for k in ("image_ids", "group_ids", "annotations_sha256")}):
+    if "version" in lock and lock["version"] != LOCK_VERSION:
+        raise IsolationError(f"unknown frozen lock version {lock['version']!r}")
+    fields = _LOCK_V2_FIELDS if "version" in lock else _LOCK_V1_FIELDS
+    if lock["lock_sha256"] != _digest({k: lock[k] for k in fields}):
         raise IsolationError("frozen lock file was modified")
     if lock["annotations_sha256"] != _digest(annotations):
         raise IsolationError("frozen annotations do not match the lock")
     return lock
+
+
+def check_image_content(expected: Mapping[str, Mapping], refs: Sequence[ImageRef], source: str) -> None:
+    """Each ref must have the sha256, width and height ``expected`` gives for its id (the uri is not compared)."""
+    for ref in refs:
+        want = expected[ref.id]
+        if diff := [f"{k} {want[k]!r} != {getattr(ref, k)!r}" for k in CONTENT_FIELDS if want[k] != getattr(ref, k)]:
+            raise IsolationError(f"image {ref.id!r} is not the image in {source}: {'; '.join(diff)} "
+                                 "(expected != routed)")
 
 
 @dataclass(frozen=True)

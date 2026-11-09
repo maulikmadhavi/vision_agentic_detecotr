@@ -150,10 +150,12 @@ def _records(tmp_path, n=30, scorer="rel@1"):
             if present:
                 label_anns.append({"id": len(label_anns) + 1, "image_id": k + 1, "category_id": cat,
                                    "bbox": [5, 5, 10, 10]})
-        manifest[name] = {"group_id": f"g{k}", "split": "calibration"}
+        image = records[-1].image
+        manifest[name] = {"group_id": f"g{k}", "split": "calibration", "sha256": image.sha256,
+                          "width": image.width, "height": image.height}
     labels = {"vad_label_provenance": "synthetic", "categories": [{"id": 1, "name": CLASS_A}, {"id": 2, "name": CLASS_B}],
               "images": label_images, "annotations": label_anns}
-    return records, labels, {"version": "split-v1", "images": manifest}
+    return records, labels, {"version": "split-v2", "images": manifest}
 
 
 def test_fit_from_a_trace_writes_a_complete_artifact(tmp_path):
@@ -180,6 +182,32 @@ def test_fitting_refuses_images_outside_the_calibration_split(tmp_path, split):
     records, labels, manifest = _records(tmp_path)
     manifest["images"]["img3"]["split"] = split
     with pytest.raises(IsolationError, match="img3"):
+        fit_relevance(records, labels, manifest, SCALE_CFG)
+
+
+# --- R5-2: fitting inputs are bound to the split's image content ---------------------------------
+
+
+def test_fitting_needs_a_split_manifest_with_image_content(tmp_path):
+    records, labels, manifest = _records(tmp_path)
+    with pytest.raises(CalibrationError, match="split-v2"):
+        fit_relevance(records, labels, {**manifest, "version": "split-v1"}, SCALE_CFG)
+
+
+@pytest.mark.parametrize("field, value", [("sha256", "0" * 64), ("width", 65), ("height", 49)])
+def test_fitting_refuses_a_record_whose_image_differs_from_the_split(tmp_path, field, value):
+    records, labels, manifest = _records(tmp_path)
+    manifest["images"]["img3"][field] = value
+    with pytest.raises(IsolationError, match=f"img3.*{field}"):
+        fit_relevance(records, labels, manifest, SCALE_CFG)
+
+
+def test_fitting_refuses_frozen_image_bytes_under_another_id(tmp_path):
+    records, labels, manifest = _records(tmp_path)
+    reentered = records[0].image  # every fixture image has the same bytes; one of them is also a frozen image
+    manifest["images"]["frozen-x"] = {"group_id": "g-frozen", "split": "frozen_eval", "sha256": reentered.sha256,
+                                      "width": reentered.width, "height": reentered.height}
+    with pytest.raises(IsolationError, match="img0.*frozen-x"):
         fit_relevance(records, labels, manifest, SCALE_CFG)
 
 

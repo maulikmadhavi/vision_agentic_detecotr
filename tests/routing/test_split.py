@@ -18,6 +18,10 @@ from .helpers import CLASS_A, CLASS_B, config, task
 CATS = [{"id": 1, "name": CLASS_A}, {"id": 2, "name": CLASS_B}]
 
 
+def _sha(name):
+    return hashlib.sha256(name.encode()).hexdigest()
+
+
 def _inputs(n_pos=10, n_neg=6, extra_images=(), excluded=()):
     """Groups g-p0.. (positive) and g-n0.. (negative); each group holds two images."""
     images, labelled, positives = {}, [], []
@@ -25,13 +29,15 @@ def _inputs(n_pos=10, n_neg=6, extra_images=(), excluded=()):
         for g in range(n):
             for k in range(2):
                 image_id = f"{kind}{g}-{k}"
-                images[image_id] = {"group_id": f"g-{kind}{g}", "sha256": image_id, "dhash": None, "source": None}
+                images[image_id] = {"group_id": f"g-{kind}{g}", "sha256": _sha(image_id), "width": 100,
+                                    "height": 100, "dhash": None, "source": None}
                 labelled.append(image_id)
                 if kind == "p" and k == 0:
                     positives.append(image_id)
     for image_id, group in extra_images:
-        images[image_id] = {"group_id": group, "sha256": image_id, "dhash": None, "source": None}
-    groups = {"version": "groups-v1", "max_hamming": 6, "review_margin": 4, "images": images, "pairs": [],
+        images[image_id] = {"group_id": group, "sha256": _sha(image_id), "width": 100, "height": 100, "dhash": None,
+                            "source": None}
+    groups = {"version": "groups-v2", "max_hamming": 6, "review_margin": 4, "images": images, "pairs": [],
               "unreadable": []}
     labels = {"vad_label_provenance": "synthetic", "categories": [dict(c) for c in CATS],
               "images": [{"id": i + 1, "vad_image_id": name, "width": 100, "height": 100, "vad_exhaustive": True}
@@ -42,6 +48,10 @@ def _inputs(n_pos=10, n_neg=6, extra_images=(), excluded=()):
         labels["annotations"].append({"id": k + 1, "image_id": ids[name], "category_id": 1, "bbox": [10, 10, 20, 20]})
     exclusions = {"vad_exclusions": 1, "recorded_by": "rev-1", "exclusions": [dict(e) for e in excluded]}
     return groups, exclusions, labels
+
+
+def content_of(manifest, image_ids):
+    return {i: {k: manifest["images"][i][k] for k in ("sha256", "width", "height")} for i in image_ids}
 
 
 def _groups_by_split(manifest):
@@ -97,7 +107,7 @@ def test_manifest_pins_the_input_digests_and_the_seed():
     manifest, _ = make_split(groups, exclusions, labels, task(), seed=11)
     assert manifest["inputs"] == {"groups_sha256": _digest(groups), "exclusions_sha256": exclusions_digest(exclusions),
                                   "labels_sha256": _digest(labels)}
-    assert (manifest["seed"], manifest["version"]) == (11, "split-v1")
+    assert (manifest["seed"], manifest["version"]) == (11, "split-v2")
 
 
 def test_halves_round_up_not_to_even():
@@ -119,7 +129,8 @@ def test_the_frozen_lock_still_verifies_after_the_label_file_is_reordered(tmp_pa
     groups, exclusions, labels = _inputs()
     manifest, frozen = make_split(groups, exclusions, labels, task(), seed=11)
     frozen_ids = sorted(i for i, img in manifest["images"].items() if img["split"] == "frozen_eval")
-    lock_frozen_set(frozen_ids, _groups_by_split(manifest)["frozen_eval"], frozen, tmp_path / "lock.json")
+    lock_frozen_set(frozen_ids, _groups_by_split(manifest)["frozen_eval"], frozen, tmp_path / "lock.json",
+                    content=content_of(manifest, frozen_ids))
     reordered = {**labels, "images": labels["images"][::-1], "annotations": labels["annotations"][::-1]}
     assert load_frozen(tmp_path / "lock.json", frozen_label_subset(reordered, frozen_ids))
 
@@ -148,12 +159,68 @@ def test_unreadable_images_must_be_excluded():
         make_split(groups, exclusions, labels, task(), seed=11)
 
 
+# --- R5-2: image content (sha256 and size) travels from the groups file into the split and the lock
+
+
+def test_the_split_carries_each_image_s_sha256_and_size_from_the_groups_file():
+    groups, exclusions, labels = _inputs()
+    manifest, _ = make_split(groups, exclusions, labels, task(), seed=11)
+    assert {i: (img["sha256"], img["width"], img["height"]) for i, img in manifest["images"].items()} == \
+        {i: (g["sha256"], 100, 100) for i, g in groups["images"].items()}
+
+
+def test_a_groups_v1_file_without_image_sizes_is_refused():
+    groups, exclusions, labels = _inputs()
+    groups["version"] = "groups-v1"
+    with pytest.raises(SampleError, match="groups-v2.*sample group"):
+        make_split(groups, exclusions, labels, task(), seed=11)
+
+
+def _locked(tmp_path):
+    manifest, frozen = make_split(*_inputs(), task(), seed=11)
+    frozen_ids = sorted(i for i, img in manifest["images"].items() if img["split"] == "frozen_eval")
+    lock = lock_frozen_set(frozen_ids, _groups_by_split(manifest)["frozen_eval"], frozen, tmp_path / "lock.json",
+                           content=content_of(manifest, frozen_ids))
+    return manifest, frozen, frozen_ids, lock
+
+
+def test_the_lock_binds_the_frozen_images_content_under_its_own_hash(tmp_path):
+    manifest, frozen, frozen_ids, lock = _locked(tmp_path)
+    assert lock["version"] == "frozen-lock-v2" and lock["images"] == content_of(manifest, frozen_ids)
+    edited = json.loads((tmp_path / "lock.json").read_text(encoding="utf-8"))
+    edited["images"][frozen_ids[0]]["sha256"] = "0" * 64
+    (tmp_path / "lock.json").write_text(json.dumps(edited), encoding="utf-8")
+    with pytest.raises(IsolationError, match="modified"):
+        load_frozen(tmp_path / "lock.json", frozen)
+
+
+def test_a_lock_of_an_unknown_version_is_refused(tmp_path):
+    _, frozen, _, lock = _locked(tmp_path)
+    newer = {**lock, "version": "frozen-lock-v9"}
+    newer["lock_sha256"] = _digest({k: newer[k] for k in ("version", "image_ids", "group_ids", "annotations_sha256",
+                                                          "images")})
+    (tmp_path / "lock.json").write_text(json.dumps(newer), encoding="utf-8")
+    with pytest.raises(IsolationError, match="unknown frozen lock version 'frozen-lock-v9'"):
+        load_frozen(tmp_path / "lock.json", frozen)
+
+
+def test_an_old_lock_without_image_content_still_loads_and_is_not_upgraded(tmp_path):
+    manifest, frozen, frozen_ids, lock = _locked(tmp_path)
+    old = {k: lock[k] for k in ("image_ids", "group_ids", "annotations_sha256")}
+    old["lock_sha256"] = _digest(old)
+    (tmp_path / "old.json").write_text(json.dumps(old), encoding="utf-8")
+    before = (tmp_path / "old.json").read_bytes()
+    assert "version" not in load_frozen(tmp_path / "old.json", frozen)
+    assert (tmp_path / "old.json").read_bytes() == before
+
+
 def test_frozen_subset_verifies_against_the_lock_and_detects_edits(tmp_path):
     groups, exclusions, labels = _inputs()
     manifest, frozen = make_split(groups, exclusions, labels, task(), seed=11)
     frozen_ids = sorted(i for i, img in manifest["images"].items() if img["split"] == "frozen_eval")
     assert frozen == frozen_label_subset(labels, frozen_ids)
-    lock_frozen_set(frozen_ids, _groups_by_split(manifest)["frozen_eval"], frozen, tmp_path / "lock.json")
+    lock_frozen_set(frozen_ids, _groups_by_split(manifest)["frozen_eval"], frozen, tmp_path / "lock.json",
+                    content=content_of(manifest, frozen_ids))
     assert load_frozen(tmp_path / "lock.json", frozen_label_subset(labels, frozen_ids))["image_ids"] == frozen_ids
     edited = json.loads(json.dumps(labels))
     frozen_image = next(i["id"] for i in edited["images"] if i["vad_image_id"] in frozen_ids)

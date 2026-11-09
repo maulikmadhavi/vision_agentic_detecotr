@@ -111,26 +111,33 @@ def group_images(fingerprints: Mapping[str, Fingerprint], sources: Mapping[str, 
 
 
 def group_manifest(entries: Sequence[ManifestEntry], max_hamming: int = 6) -> dict:
-    """Fingerprint and group manifest images; unreadable images get their own group and are listed."""
+    """Fingerprint and group manifest images; unreadable images get their own group and are listed.
+
+    Each image carries its sha256 and its decoded width and height (the same values a routed
+    record's ImageRef gets), so the split and the frozen lock can bind results to image content.
+    """
     fingerprints: dict[str, Fingerprint] = {}
+    sizes: dict[str, tuple[int | None, int | None]] = {}
     sources: dict[str, str | None] = {}
     unreadable: list[str] = []
     for entry in entries:
         try:
             _, ref = load_image(entry)
-            image_id, fp = ref.id, fingerprint(entry.uri)
+            image_id, fp, size = ref.id, fingerprint(entry.uri), (ref.width, ref.height)
         except Exception:  # unreadable or corrupt: keep it visible, never drop it
             data = Path(entry.uri).read_bytes() if Path(entry.uri).exists() else b""
             sha = hashlib.sha256(data).hexdigest()
             image_id, fp = entry.image_id or f"sha256-{sha[:16]}", Fingerprint(sha256=sha, dhash=None)
+            size = (None, None)
             unreadable.append(image_id)
         if image_id in fingerprints:
             raise SampleError(f"duplicate image id {image_id!r} in the manifest")
-        fingerprints[image_id], sources[image_id] = fp, entry.group_id
+        fingerprints[image_id], sources[image_id], sizes[image_id] = fp, entry.group_id, size
     grouping = group_images(fingerprints, sources, max_hamming)
     return {
-        "version": "groups-v1", "max_hamming": max_hamming, "review_margin": REVIEW_MARGIN,
+        "version": "groups-v2", "max_hamming": max_hamming, "review_margin": REVIEW_MARGIN,
         "images": {i: {"group_id": grouping.groups[i], "sha256": fp.sha256,
+                       "width": sizes[i][0], "height": sizes[i][1],
                        "dhash": None if fp.dhash is None else f"{fp.dhash:016x}", "source": sources[i]}
                    for i, fp in sorted(fingerprints.items())},
         "pairs": grouping.pairs, "unreadable": sorted(unreadable),
@@ -213,8 +220,8 @@ def make_split(groups_doc: Mapping, exclusions_doc: Mapping, label_doc: Mapping,
     split is refused rather than padded; an empty stratum is stated in ``warnings``. Excluded
     images stay in the manifest as ``excluded``.
     """
-    if groups_doc.get("version") != "groups-v1":
-        raise SampleError("--groups must be a groups-v1 file from `vad-route sample group`")
+    if groups_doc.get("version") != "groups-v2":
+        raise SampleError("--groups must be a groups-v2 file (with image sizes); re-run `vad-route sample group`")
     image_group = {i: v["group_id"] for i, v in groups_doc["images"].items()}
     exclusions = {e.image_id: e for e in load_exclusions(exclusions_doc, image_group)}
     if missing := sorted(set(groups_doc["unreadable"]) - set(exclusions)):
@@ -255,8 +262,10 @@ def make_split(groups_doc: Mapping, exclusions_doc: Mapping, label_doc: Mapping,
     images = {}
     for image_id in sorted(image_group):
         group_id, excl = image_group[image_id], exclusions.get(image_id)
+        content = groups_doc["images"][image_id]
         images[image_id] = {
             "group_id": group_id,
+            "sha256": content["sha256"], "width": content["width"], "height": content["height"],
             "split": "excluded" if excl else split[group_id],
             "stratum": None if excl else stratum[group_id],
             "exclusion": {"reason": excl.reason, "out_of_domain_set": excl.out_of_domain_set} if excl else None,
@@ -270,7 +279,7 @@ def make_split(groups_doc: Mapping, exclusions_doc: Mapping, label_doc: Mapping,
     for img in images.values():
         counts[img["split"]]["images"] += 1
     manifest = {
-        "version": "split-v1", "seed": seed,
+        "version": "split-v2", "seed": seed,
         "fractions": {"frozen_eval": FROZEN_FRACTION, "calibration_of_tuning": CALIBRATION_FRACTION},
         "inputs": {"groups_sha256": _digest(groups_doc), "exclusions_sha256": exclusions_digest(exclusions_doc),
                    "labels_sha256": _digest(label_doc)},

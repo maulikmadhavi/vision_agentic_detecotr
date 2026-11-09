@@ -34,7 +34,7 @@ from pathlib import Path
 import numpy as np
 from pydantic import ValidationError
 
-from .evaluation import assert_split_allows
+from .evaluation import IsolationError, assert_split_allows, check_image_content
 from .metrics import load_ground_truth
 from .sample import label_digest
 from .schemas import RelevanceCalibratorArtifact, RouteRecord, TaskSpec, canonical_json
@@ -183,7 +183,17 @@ def fit_relevance(records: Sequence[RouteRecord], label_doc: Mapping, split_mani
         raise CalibrationError(f"the trace must come from exactly one relevance scorer; found {scorers}")
     if any(r.task != task for r in records):
         raise CalibrationError("the trace was routed with a different task (classes or prompts) than --config")
+    if split_manifest.get("version") != "split-v2":
+        raise CalibrationError("fitting needs a split-v2 manifest (with each image's sha256 and size) from "
+                               "`vad-route sample split`")
     assert_split_allows(split_manifest, sorted(r.image.id for r in records), ("calibration",))
+    images = split_manifest["images"]
+    check_image_content(images, sorted((r.image for r in records), key=lambda ref: ref.id), "the split manifest")
+    frozen_bytes = {img["sha256"]: i for i, img in sorted(images.items()) if img["split"] == "frozen_eval"}
+    if reentered := sorted((r.image.id, frozen_bytes[r.image.sha256]) for r in records
+                           if r.image.sha256 in frozen_bytes):
+        raise IsolationError(f"image {reentered[0][0]!r} has the same bytes as frozen image {reentered[0][1]!r}; "
+                             f"a frozen image must not be fitted on under another id ({len(reentered)} such images)")
     ground_truth = load_ground_truth(label_doc, task)
     rows, excluded = [], {"unlabelled": [], "relevance_unavailable": []}
     for record in sorted(records, key=lambda r: r.image.id):

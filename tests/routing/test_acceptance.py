@@ -516,9 +516,10 @@ def test_frozen_set_is_locked_and_not_rewritten_by_threshold_changes(tmp_path):
     ann = {"img1": [[CLASS_A, [1, 2, 3, 4]]]}
     frozen_file = tmp_path / "frozen_annotations.json"
     frozen_file.write_text(json.dumps(ann), encoding="utf-8")
-    lock = lock_frozen_set(["img1"], ["g9"], ann, tmp_path / "frozen.lock.json")
+    content = {"img1": {"sha256": "0" * 64, "width": 8, "height": 8}}
+    lock = lock_frozen_set(["img1"], ["g9"], ann, tmp_path / "frozen.lock.json", content=content)
     with pytest.raises(FileExistsError):
-        lock_frozen_set(["img1"], ["g9"], ann, tmp_path / "frozen.lock.json")
+        lock_frozen_set(["img1"], ["g9"], ann, tmp_path / "frozen.lock.json", content=content)
     before = frozen_file.read_bytes()
 
     entry = _img(tmp_path)
