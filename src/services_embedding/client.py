@@ -120,8 +120,8 @@ class WeMMMCPRelevanceScorer:
         valid = True
         try:
             (row,) = payload["results"]  # exactly one image was sent, so exactly one result row
-            for m in row["matches"]:
-                index, value = int(m["index"]), float(m["score"])
+            for match in row["matches"]:
+                index, value = int(match["index"]), float(match["score"])
                 valid = valid and index not in by_index and 0 <= index < len(texts) and math.isfinite(value)
                 by_index[index] = value
         except (KeyError, IndexError, TypeError, ValueError) as e:
@@ -129,6 +129,6 @@ class WeMMMCPRelevanceScorer:
         if not valid or len(by_index) != len(texts):
             raise RemoteScorerError(f"expected one finite score per index 0..{len(texts) - 1}")
         out: dict[str, float] = {}
-        for i, class_id in enumerate(owners):
-            out[class_id] = max(out.get(class_id, -math.inf), by_index[i])
+        for index, class_id in enumerate(owners):
+            out[class_id] = max(out.get(class_id, -math.inf), by_index[index])
         return out

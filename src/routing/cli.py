@@ -73,8 +73,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     _validate_args(parser, args)
     if args.cmd == "export-schema":
-        for f in export_json_schemas(args.out):
-            print(f)
+        for path in export_json_schemas(args.out):
+            print(path)
         return 0
 
     cfg = load_config(args.config)
@@ -111,13 +111,13 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
 
 
 def _run_legacy(cfg: RoutingConfig, primary: Detector, entries: list[ManifestEntry], out: Path) -> int:
-    preds = []
+    predictions = []
     pipe = RoutingPipeline(cfg, primary, RouteStore(":memory:"))
-    for e in entries:
-        img, ref = load_image(e)
-        preds.append(({"file_name": ref.uri, "width": ref.width, "height": ref.height, "vad_image_id": ref.id},
-                      pipe.legacy_predict(img, ref)))
-    export_legacy(preds, cfg.task, out / "annotations.json")
+    for entry in entries:
+        image, ref = load_image(entry)
+        predictions.append(({"file_name": ref.uri, "width": ref.width, "height": ref.height, "vad_image_id": ref.id},
+                            pipe.legacy_predict(image, ref)))
+    export_legacy(predictions, cfg.task, out / "annotations.json")
     print(f"legacy primary-only export: {out / 'annotations.json'}")
     return 0
 
@@ -141,10 +141,10 @@ def _build_relevance_scorer(parser: argparse.ArgumentParser, args: argparse.Name
 def _run_shadow(parser: argparse.ArgumentParser, args: argparse.Namespace, cfg: RoutingConfig, primary: Detector,
                 entries: list[ManifestEntry], out: Path) -> int:
     # Shadow mode: force-enable routing for this run only; nothing is discarded.
-    upd = {"routing_enabled": True}
+    overrides = {"routing_enabled": True}
     if args.vlm:
-        upd["vlm"] = cfg.vlm.model_copy(update={"enabled": True})
-    cfg = cfg.model_copy(update=upd)
+        overrides["vlm"] = cfg.vlm.model_copy(update={"enabled": True})
+    cfg = cfg.model_copy(update=overrides)
     secondary = (PrecomputedDetector(args.secondary_predictions, args.secondary_version)
                  if args.secondary_predictions else None)
     relevance = _build_relevance_scorer(parser, args, cfg)
@@ -176,14 +176,15 @@ def _write_shadow_outputs(results: list[RouteRecord | ErrorRecord], task: TaskSp
     A reused --out store may hold records from earlier runs (other manifests, tasks or
     configs); those must not leak into the exports.
     """
-    records = sorted((r for r in results if isinstance(r, RouteRecord)), key=lambda r: r.image.id)
-    errors = [r for r in results if isinstance(r, ErrorRecord)]
+    records = sorted((result for result in results if isinstance(result, RouteRecord)),
+                     key=lambda record: record.image.id)
+    errors = [result for result in results if isinstance(result, ErrorRecord)]
     export_routed(records, task, out / "annotations.json")
-    with open(out / "route_trace.jsonl", "w", encoding="utf-8") as f:
-        for r in records:
-            f.write(r.model_dump_json() + "\n")
+    with open(out / "route_trace.jsonl", "w", encoding="utf-8") as trace_file:
+        for record in records:
+            trace_file.write(record.model_dump_json() + "\n")
     report = route_report(records)
-    report["errors"] = [e.model_dump(mode="json") for e in errors]
+    report["errors"] = [error.model_dump(mode="json") for error in errors]
     (out / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
 

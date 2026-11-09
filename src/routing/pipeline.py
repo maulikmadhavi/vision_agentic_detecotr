@@ -130,9 +130,9 @@ class RoutingPipeline:
         cached = self.store.get_step(key, "stage_a")
         if cached is not None:
             return StageA.model_validate(cached)
-        sa = stage_a(image, ref, self.cfg, self.relevance, self.calibrator)
-        self.store.put_step(key, "stage_a", sa.model_dump(mode="json"))
-        return sa
+        scores = stage_a(image, ref, self.cfg, self.relevance, self.calibrator)
+        self.store.put_step(key, "stage_a", scores.model_dump(mode="json"))
+        return scores
 
     def _run_cached_detector(
         self, key: str, step: str, detector: Detector, image: Image.Image, ref: ImageRef, source: Source,
@@ -142,9 +142,10 @@ class RoutingPipeline:
         cached = self.store.get_step(key, step)
         if cached is None:
             class_ids = self.cfg.task.class_ids
-            res = detector.detect(image, ref.id, class_ids)
-            dets, warns = to_detections(res.detections, ref, class_ids, source, detector.model_version, class_mapping)
-            cached = {"detections": _dump(dets), "gpu_ms": res.gpu_ms, "warnings": warns}
+            result = detector.detect(image, ref.id, class_ids)
+            detections, mapping_warnings = to_detections(result.detections, ref, class_ids, source,
+                                                         detector.model_version, class_mapping)
+            cached = {"detections": _dump(detections), "gpu_ms": result.gpu_ms, "warnings": mapping_warnings}
             self.store.put_step(key, step, cached)
         return _dets(cached["detections"]), cached["gpu_ms"], list(cached["warnings"])
 
@@ -167,27 +168,31 @@ class RoutingPipeline:
                 return "gpu_budget_exhausted"
             return None
 
-        r = run_sliced(self.sahi_detector, image, ref, self.cfg.task.class_ids, self.cfg.slicing,
-                       self.cfg.matching.class_mapping, max_slices=budgets.max_slices, stop_check=stop_check)
-        cached = {"detections": _dump(r.detections), "raw": _dump(r.raw), "gpu_ms": r.gpu_ms,
-                  "warnings": r.warnings, "slices_run": r.slices_run, "stopped_reason": r.stopped_reason}
+        sliced = run_sliced(self.sahi_detector, image, ref, self.cfg.task.class_ids, self.cfg.slicing,
+                            self.cfg.matching.class_mapping, max_slices=budgets.max_slices, stop_check=stop_check)
+        cached = {"detections": _dump(sliced.detections), "raw": _dump(sliced.raw), "gpu_ms": sliced.gpu_ms,
+                  "warnings": sliced.warnings, "slices_run": sliced.slices_run, "stopped_reason": sliced.stopped_reason}
         self.store.put_step(key, "sahi", cached)
         return cached
 
     def _route_image(self, image: Image.Image, ref: ImageRef, key: str) -> RouteRecord:
-        cfg, t0 = self.cfg, self.clock()
+        cfg = self.cfg
+        start = self.clock()
         events: list[str] = []
         warnings: list[str] = []
         failures: list[str] = []
         gpu_total: float | None = 0.0
         slices_used = 0
 
-        def add_gpu(v: float | None) -> None:
+        def add_gpu(ms: float | None) -> None:
             nonlocal gpu_total
-            gpu_total = None if (v is None or gpu_total is None) else gpu_total + v
+            if ms is None or gpu_total is None:
+                gpu_total = None  # one unmeasured call makes the image's GPU total unknown
+            else:
+                gpu_total += ms
 
         def elapsed_ms() -> float:
-            return (self.clock() - t0) * 1000.0
+            return (self.clock() - start) * 1000.0
 
         def within_budget(step: str) -> bool:
             if elapsed_ms() >= cfg.budgets.max_elapsed_ms:
@@ -199,23 +204,24 @@ class RoutingPipeline:
             return True
 
         self._step = "stage_a"
-        sa = self._load_or_compute_stage_a(image, ref, key)
+        stage_a_scores = self._load_or_compute_stage_a(image, ref, key)
 
         self._step = "primary"
         # A primary failure propagates: process() queues the image as an ErrorRecord.
-        primary, g, w = self._run_cached_detector(key, "primary", self.primary, image, ref, "primary")
-        add_gpu(g)
-        warnings += w
+        primary, gpu_ms, detector_warnings = self._run_cached_detector(key, "primary", self.primary, image, ref,
+                                                                       "primary")
+        add_gpu(gpu_ms)
+        warnings += detector_warnings
         events.append(f"primary:{len(primary)}")
 
         self._step = "stage_b"
-        features = box_features(primary, ref, sa, cfg)
+        features = box_features(primary, ref, stage_a_scores, cfg)
         unavailable = Disagreement(status="unavailable")
-        diff_pre = estimate_difficulty(sa, features, unavailable, cfg)
+        difficulty_pre = estimate_difficulty(stage_a_scores, features, unavailable, cfg)
 
         stored = self.store.get_step(key, "route")
         if stored is None:
-            decision = route(ref.id, ref.width, ref.height, sa, features, diff_pre, self.caps, cfg)
+            decision = route(ref.id, ref.width, ref.height, stage_a_scores, features, difficulty_pre, self.caps, cfg)
             self.store.put_step(key, "route", decision.model_dump(mode="json"))  # persist before expensive calls
         else:
             decision = RouteDecision.model_validate(stored)
@@ -225,13 +231,14 @@ class RoutingPipeline:
         secondary: list[Detection] = []
         sahi: list[Detection] = []
         sahi_raw: list[Detection] = []
-        ran_secondary = ran_sahi = False
+        ran_secondary = False
+        ran_sahi = False
         if "secondary" in decision.actions and self.secondary is not None and within_budget("secondary"):
             try:
-                secondary, g, w = self._run_cached_detector(key, "secondary", self.secondary, image, ref, "secondary",
-                                                            cfg.matching.class_mapping)
-                add_gpu(g)
-                warnings += w
+                secondary, gpu_ms, detector_warnings = self._run_cached_detector(
+                    key, "secondary", self.secondary, image, ref, "secondary", cfg.matching.class_mapping)
+                add_gpu(gpu_ms)
+                warnings += detector_warnings
                 ran_secondary = True
                 events.append(f"secondary:{len(secondary)}")
             except Exception as e:  # an optional detector failing is a review reason, not an error
@@ -253,13 +260,15 @@ class RoutingPipeline:
 
         self._step = "fusion"
         # Stage B after secondary: class-aware matching and directional disagreement.
-        dis = unavailable
+        detector_disagreement = unavailable
         mislocalized_ids: set[str] = set()
+        difficulty_final = difficulty_pre
         if ran_secondary:
-            m = match(primary, secondary, cfg.matching.iou_threshold)
-            dis = disagreement(m, cfg.matching.mislocalized_iou)
-            mislocalized_ids = {i for p, s, v in m.pairs if v < cfg.matching.mislocalized_iou for i in (p.id, s.id)}
-        diff_final = estimate_difficulty(sa, features, dis, cfg) if ran_secondary else diff_pre
+            matched = match(primary, secondary, cfg.matching.iou_threshold)
+            detector_disagreement = disagreement(matched, cfg.matching.mislocalized_iou)
+            mislocalized_ids = {det.id for primary_det, secondary_det, pair_iou in matched.pairs
+                                if pair_iou < cfg.matching.mislocalized_iou for det in (primary_det, secondary_det)}
+            difficulty_final = estimate_difficulty(stage_a_scores, features, detector_disagreement, cfg)
 
         candidates = self._candidates(primary, secondary, sahi, decision, ran_secondary or ran_sahi, mislocalized_ids)
 
@@ -269,53 +278,54 @@ class RoutingPipeline:
         vlm_used = 0
         if "vlm_verify" in decision.actions and self.vlm is not None:
             candidates, verifications, missing_checks, vlm_used = self._verify(
-                image, ref, key, sa, candidates, within_budget, failures)
+                image, ref, key, stage_a_scores, candidates, within_budget, failures)
 
         self._step = "record"
-        completeness = audit(candidates, sa, decision, missing_checks, cfg, failure_reasons=failures)
-        used = Budget(slices=slices_used, vlm_calls=vlm_used, elapsed_ms=round(elapsed_ms(), 2), gpu_ms=gpu_total)
-        rec = RouteRecord(
-            record_id=key, image=ref, task=cfg.task, run=self.run_info, stage_a=sa,
+        completeness = audit(candidates, stage_a_scores, decision, missing_checks, cfg, failure_reasons=failures)
+        budget_used = Budget(slices=slices_used, vlm_calls=vlm_used, elapsed_ms=round(elapsed_ms(), 2),
+                             gpu_ms=gpu_total)
+        record = RouteRecord(
+            record_id=key, image=ref, task=cfg.task, run=self.run_info, stage_a=stage_a_scores,
             primary_candidates=tuple(primary), secondary_candidates=tuple(secondary), sahi_candidates=tuple(sahi),
             sahi_raw_candidates=tuple(sahi_raw),
-            stage_b=StageB(difficulty_pre_secondary=diff_pre, difficulty_final=diff_final,
-                           features=features, disagreement=dis),
+            stage_b=StageB(difficulty_pre_secondary=difficulty_pre, difficulty_final=difficulty_final,
+                           features=features, disagreement=detector_disagreement),
             route=decision, verifications=tuple(verifications + missing_checks),
             final_candidates=tuple(candidates), completeness=completeness,
-            trace=Trace(elapsed_ms=used.elapsed_ms, gpu_ms=gpu_total, budget_used=used,
+            trace=Trace(elapsed_ms=budget_used.elapsed_ms, gpu_ms=gpu_total, budget_used=budget_used,
                         events=tuple(events), warnings=tuple(dict.fromkeys(warnings + failures))),
         )
-        self.store.put_record(rec)
-        return rec
+        self.store.put_record(record)
+        return record
 
     def _candidates(
         self, primary: Sequence[Detection], secondary: Sequence[Detection], sahi: Sequence[Detection],
         decision: RouteDecision, ran_extra: bool, mislocalized_ids: set[str],
     ) -> list[FinalCandidate]:
         out = []
-        rc = decision.reason_codes
-        low_rel = "low_relevance_with_detections" in rc
-        risky_unconfirmed = "high_miss_risk" in rc and not ran_extra
+        reasons = decision.reason_codes
+        low_relevance = "low_relevance_with_detections" in reasons
+        risky_unconfirmed = "high_miss_risk" in reasons and not ran_extra
         # The route wanted a second detector (moderate route, or secondary planned but skipped/failed)
         # and none ran: primary boxes are not confirmed by anything, so they must not be auto-accepted.
         moderate_unconfirmed = (not ran_extra and not risky_unconfirmed
-                                and ("secondary" in decision.actions or "secondary_unavailable" in rc))
-        for fc in fuse([*primary, *secondary, *sahi], self.cfg.matching.iou_threshold):
+                                and ("secondary" in decision.actions or "secondary_unavailable" in reasons))
+        for cluster in fuse([*primary, *secondary, *sahi], self.cfg.matching.iou_threshold):
             flags: list[str] = []
-            has_primary = "primary" in fc.sources
+            has_primary = "primary" in cluster.sources
             if risky_unconfirmed:
                 flags.append("high_miss_risk_unconfirmed")
             if moderate_unconfirmed:
                 flags.append("secondary_unconfirmed")
-            if fc.cross_class_conflict:
+            if cluster.cross_class_conflict:
                 flags.append("cross_class_conflict")
-            if any(d.id in mislocalized_ids for d in fc.members):
+            if any(det.id in mislocalized_ids for det in cluster.members):
                 flags.append("mislocalized")
-            if has_primary and ran_extra and fc.sources == {"primary"}:
+            if has_primary and ran_extra and cluster.sources == {"primary"}:
                 flags.append("primary_only_disagreement")
             if not has_primary:
-                flags.append("detector_proposal:" + "+".join(sorted(fc.sources)))
-            if low_rel:
+                flags.append("detector_proposal:" + "+".join(sorted(cluster.sources)))
+            if low_relevance:
                 flags.append("low_relevance_image")
             if not has_primary:
                 status = "candidate"
@@ -323,11 +333,11 @@ class RoutingPipeline:
                 status = "needs_review"
             else:
                 status = "accepted"
-            out.append(final_candidate(fc, status, flags))
-        return sorted(out, key=lambda c: c.id)
+            out.append(final_candidate(cluster, status, flags))
+        return sorted(out, key=lambda candidate: candidate.id)
 
     def _verify(
-        self, image: Image.Image, ref: ImageRef, key: str, sa: StageA, candidates: list[FinalCandidate],
+        self, image: Image.Image, ref: ImageRef, key: str, stage_a_scores: StageA, candidates: list[FinalCandidate],
         within_budget: Callable[[str], bool], failures: list[str],
     ) -> tuple[list[FinalCandidate], list[VerificationResult], list[VerificationResult], int]:
         """Bounded VLM pass: reviewable candidates first, then high-relevance classes without an accepted box.
@@ -336,66 +346,69 @@ class RoutingPipeline:
         step cache on resume, so the logical cap holds across restarts.
         """
         cfg = self.cfg
-        names = {c.class_id: c.positive_prompts[0] for c in cfg.task.classes}
+        descriptions = {spec.class_id: spec.positive_prompts[0] for spec in cfg.task.classes}
         cap = cfg.budgets.max_vlm_calls
         calls = 0
         verifications: list[VerificationResult] = []
 
         updated = []
-        for c in candidates:
-            if c.status not in ("needs_review", "candidate"):
-                updated.append(c)
+        for candidate in candidates:
+            if candidate.status not in ("needs_review", "candidate"):
+                updated.append(candidate)
                 continue
             if calls >= cap or not within_budget("vlm_verify"):
                 failures.append("vlm_call_cap_reached" if calls >= cap else "vlm_skipped_budget")
-                updated.append(c)
+                updated.append(candidate)
                 continue
-            req = VerificationRequest(id=stable_id("vreq", [key, "confirm", c.id]), image_id=ref.id,
-                                      class_id=c.class_id, candidate_ids=(c.id,), region_xyxy=c.box_xyxy,
-                                      purpose="confirm_candidate")
+            request = VerificationRequest(id=stable_id("vreq", [key, "confirm", candidate.id]), image_id=ref.id,
+                                          class_id=candidate.class_id, candidate_ids=(candidate.id,),
+                                          region_xyxy=candidate.box_xyxy, purpose="confirm_candidate")
             calls += 1
-            res = self._verify_request(image, key, req, names[req.class_id])
-            verifications.append(res)
-            flags = c.flags + ("vlm_absent",) if res.verdict == "absent" and not cfg.vlm.absent_rejects else c.flags
-            updated.append(c.model_copy(update={"status": self._candidate_status_after_verification(c, res), "verification": res, "flags": flags}))
+            result = self._verify_request(image, key, request, descriptions[request.class_id])
+            verifications.append(result)
+            flags = candidate.flags
+            if result.verdict == "absent" and not cfg.vlm.absent_rejects:
+                flags = flags + ("vlm_absent",)
+            status = self._candidate_status_after_verification(candidate, result)
+            updated.append(candidate.model_copy(update={"status": status, "verification": result, "flags": flags}))
 
-        accepted_classes = {c.class_id for c in updated if c.status == "accepted"}
+        accepted_classes = {candidate.class_id for candidate in updated if candidate.status == "accepted"}
         missing: list[VerificationResult] = []
-        for cid in cfg.task.class_ids:
-            if cid in accepted_classes or not class_is_high_relevance(sa, cid, cfg):
+        for class_id in cfg.task.class_ids:
+            if class_id in accepted_classes or not class_is_high_relevance(stage_a_scores, class_id, cfg):
                 continue
             if calls >= cap or not within_budget("vlm_missing_class"):
                 failures.append("vlm_call_cap_reached" if calls >= cap else "vlm_skipped_budget")
                 continue
-            req = VerificationRequest(id=stable_id("vreq", [key, "missing", cid]), image_id=ref.id,
-                                      class_id=cid, purpose="suspected_missing_class")
+            request = VerificationRequest(id=stable_id("vreq", [key, "missing", class_id]), image_id=ref.id,
+                                          class_id=class_id, purpose="suspected_missing_class")
             calls += 1
-            missing.append(self._verify_request(image, key, req, names[req.class_id]))
-        return sorted(updated, key=lambda c: c.id), verifications, missing, calls
+            missing.append(self._verify_request(image, key, request, descriptions[request.class_id]))
+        return sorted(updated, key=lambda candidate: candidate.id), verifications, missing, calls
 
-    def _verify_request(self, image: Image.Image, key: str, req: VerificationRequest,
+    def _verify_request(self, image: Image.Image, key: str, request: VerificationRequest,
                         class_description: str) -> VerificationResult:
         """One VLM request with at-most-once delivery; the result is persisted under ``vlm:<id>``."""
         vlm = self.vlm
-        cached = self.store.get_step(key, f"vlm:{req.id}")
+        cached = self.store.get_step(key, f"vlm:{request.id}")
         if cached is not None:
             return VerificationResult.model_validate(cached)
         # At-most-once: the attempt is persisted *before* the external call. If a previous
         # process died between sending and saving the answer, the request is not re-sent
         # (the VLM has no idempotency key); the lost answer becomes `uncertain` -> review.
-        if self.store.get_step(key, f"vlm_attempt:{req.id}") is not None:
-            res = uncertain(req, "vlm_interrupted", vlm.model_version,
-                            "call started before an interruption; answer was not persisted")
+        if self.store.get_step(key, f"vlm_attempt:{request.id}") is not None:
+            result = uncertain(request, "vlm_interrupted", vlm.model_version,
+                               "call started before an interruption; answer was not persisted")
         else:
-            self.store.put_step(key, f"vlm_attempt:{req.id}", {"request_id": req.id})
+            self.store.put_step(key, f"vlm_attempt:{request.id}", {"request_id": request.id})
             try:
-                res = vlm.verify(image, req, class_description)
+                result = vlm.verify(image, request, class_description)
             except Exception as e:  # adapters should not raise, but never trust that
-                res = uncertain(req, "vlm_unavailable", vlm.model_version, type(e).__name__)
-            if not self._verification_matches_request(res, req):
-                res = uncertain(req, "vlm_contradictory", vlm.model_version)
-        self.store.put_step(key, f"vlm:{req.id}", res.model_dump(mode="json"))
-        return res
+                result = uncertain(request, "vlm_unavailable", vlm.model_version, type(e).__name__)
+            if not self._verification_matches_request(result, request):
+                result = uncertain(request, "vlm_contradictory", vlm.model_version)
+        self.store.put_step(key, f"vlm:{request.id}", result.model_dump(mode="json"))
+        return result
 
     @staticmethod
     def _verification_matches_request(res: object, req: VerificationRequest) -> bool:
