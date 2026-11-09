@@ -1,0 +1,69 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "candidate_ids": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Candidate Ids",
+      "type": "array"
+    },
+    "class_id": {
+      "title": "Class Id",
+      "type": "string"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "image_id": {
+      "title": "Image Id",
+      "type": "string"
+    },
+    "purpose": {
+      "enum": [
+        "confirm_candidate",
+        "suspected_missing_class"
+      ],
+      "title": "Purpose",
+      "type": "string"
+    },
+    "region_xyxy": {
+      "anyOf": [
+        {
+          "maxItems": 4,
+          "minItems": 4,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Region Xyxy"
+    }
+  },
+  "required": [
+    "id",
+    "image_id",
+    "class_id",
+    "purpose"
+  ],
+  "title": "VerificationRequest",
+  "type": "object"
+}

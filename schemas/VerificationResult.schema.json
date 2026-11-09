@@ -1,0 +1,82 @@
+{
+  "additionalProperties": false,
+  "description": "Constrained VLM output. Has no box field by design: a VLM cannot author boxes.",
+  "properties": {
+    "candidate_ids": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Candidate Ids",
+      "type": "array"
+    },
+    "class_id": {
+      "title": "Class Id",
+      "type": "string"
+    },
+    "model_note": {
+      "default": "",
+      "maxLength": 200,
+      "title": "Model Note",
+      "type": "string"
+    },
+    "model_version": {
+      "title": "Model Version",
+      "type": "string"
+    },
+    "reason_code": {
+      "title": "Reason Code",
+      "type": "string"
+    },
+    "region_xyxy": {
+      "anyOf": [
+        {
+          "maxItems": 4,
+          "minItems": 4,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Region Xyxy"
+    },
+    "request_id": {
+      "title": "Request Id",
+      "type": "string"
+    },
+    "verdict": {
+      "enum": [
+        "present",
+        "absent",
+        "uncertain"
+      ],
+      "title": "Verdict",
+      "type": "string"
+    }
+  },
+  "required": [
+    "request_id",
+    "class_id",
+    "verdict",
+    "reason_code",
+    "model_version"
+  ],
+  "title": "VerificationResult",
+  "type": "object"
+}

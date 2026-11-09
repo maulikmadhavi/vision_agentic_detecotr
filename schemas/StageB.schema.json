@@ -1,0 +1,237 @@
+{
+  "$defs": {
+    "BoxFeatures": {
+      "additionalProperties": false,
+      "properties": {
+        "class_ambiguity": {
+          "description": "fraction of boxes overlapping a different-class box",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Class Ambiguity",
+          "type": "number"
+        },
+        "crowding": {
+          "description": "fraction of boxes overlapping another above crowding_iou",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Crowding",
+          "type": "number"
+        },
+        "high_relevance_zero_boxes": {
+          "title": "High Relevance Zero Boxes",
+          "type": "boolean"
+        },
+        "mean_confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mean Confidence"
+        },
+        "min_box_area_fraction": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Box Area Fraction"
+        },
+        "min_confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Confidence"
+        },
+        "num_boxes": {
+          "minimum": 0,
+          "title": "Num Boxes",
+          "type": "integer"
+        },
+        "per_class_counts": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Per Class Counts",
+          "type": "object"
+        }
+      },
+      "required": [
+        "num_boxes",
+        "per_class_counts",
+        "crowding",
+        "class_ambiguity",
+        "high_relevance_zero_boxes"
+      ],
+      "title": "BoxFeatures",
+      "type": "object"
+    },
+    "Difficulty": {
+      "additionalProperties": false,
+      "description": "Miss/mislocalization risk *if a target is present*. Never inferred from zero boxes.",
+      "properties": {
+        "bucket": {
+          "enum": [
+            "easy",
+            "medium",
+            "hard",
+            "unknown"
+          ],
+          "title": "Bucket",
+          "type": "string"
+        },
+        "reasons": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Reasons",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "calibrated",
+            "uncalibrated",
+            "unknown"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "required": [
+        "status",
+        "bucket"
+      ],
+      "title": "Difficulty",
+      "type": "object"
+    },
+    "Disagreement": {
+      "additionalProperties": false,
+      "properties": {
+        "cross_class": {
+          "default": 0,
+          "title": "Cross Class",
+          "type": "integer"
+        },
+        "matched": {
+          "default": 0,
+          "title": "Matched",
+          "type": "integer"
+        },
+        "mean_matched_iou": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mean Matched Iou"
+        },
+        "mislocalized": {
+          "default": 0,
+          "title": "Mislocalized",
+          "type": "integer"
+        },
+        "primary_only": {
+          "default": 0,
+          "title": "Primary Only",
+          "type": "integer"
+        },
+        "primary_only_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Primary Only Ids",
+          "type": "array"
+        },
+        "secondary_only": {
+          "default": 0,
+          "title": "Secondary Only",
+          "type": "integer"
+        },
+        "secondary_only_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Secondary Only Ids",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "computed",
+            "unavailable"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "Disagreement",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "difficulty_final": {
+      "$ref": "#/$defs/Difficulty"
+    },
+    "difficulty_pre_secondary": {
+      "$ref": "#/$defs/Difficulty"
+    },
+    "disagreement": {
+      "$ref": "#/$defs/Disagreement"
+    },
+    "features": {
+      "$ref": "#/$defs/BoxFeatures"
+    }
+  },
+  "required": [
+    "difficulty_pre_secondary",
+    "difficulty_final",
+    "features",
+    "disagreement"
+  ],
+  "title": "StageB",
+  "type": "object"
+}

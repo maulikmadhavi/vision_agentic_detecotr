@@ -1,0 +1,147 @@
+{
+  "$defs": {
+    "ClassRelevance": {
+      "additionalProperties": false,
+      "properties": {
+        "raw_similarity": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw Similarity"
+        },
+        "relevance_probability": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relevance Probability"
+        }
+      },
+      "title": "ClassRelevance",
+      "type": "object"
+    },
+    "Quality": {
+      "additionalProperties": false,
+      "properties": {
+        "blur": {
+          "description": "0 sharp .. 1 very blurry (heuristic, uncalibrated)",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Blur",
+          "type": "number"
+        },
+        "exposure": {
+          "description": "fraction of clipped pixels",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Exposure",
+          "type": "number"
+        },
+        "low_resolution": {
+          "title": "Low Resolution",
+          "type": "boolean"
+        },
+        "min_side_px": {
+          "exclusiveMinimum": 0,
+          "title": "Min Side Px",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "blur",
+        "exposure",
+        "min_side_px",
+        "low_resolution"
+      ],
+      "title": "Quality",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "domain_distance": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Domain Distance"
+    },
+    "image_relevance_probability": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Image Relevance Probability"
+    },
+    "per_class": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ClassRelevance"
+      },
+      "title": "Per Class",
+      "type": "object"
+    },
+    "quality": {
+      "$ref": "#/$defs/Quality"
+    },
+    "relevance_band": {
+      "enum": [
+        "high",
+        "medium",
+        "low",
+        "unknown"
+      ],
+      "title": "Relevance Band",
+      "type": "string"
+    },
+    "relevance_status": {
+      "enum": [
+        "calibrated",
+        "uncalibrated",
+        "unavailable"
+      ],
+      "title": "Relevance Status",
+      "type": "string"
+    },
+    "warnings": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "per_class",
+    "relevance_status",
+    "relevance_band",
+    "quality"
+  ],
+  "title": "StageA",
+  "type": "object"
+}

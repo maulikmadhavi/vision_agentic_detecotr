@@ -1,0 +1,88 @@
+{
+  "$defs": {
+    "Budget": {
+      "additionalProperties": false,
+      "properties": {
+        "elapsed_ms": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Elapsed Ms",
+          "type": "number"
+        },
+        "gpu_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gpu Ms"
+        },
+        "slices": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Slices",
+          "type": "integer"
+        },
+        "vlm_calls": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Vlm Calls",
+          "type": "integer"
+        }
+      },
+      "title": "Budget",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "actions": {
+      "items": {
+        "enum": [
+          "standard",
+          "secondary",
+          "sahi",
+          "vlm_verify",
+          "human_review",
+          "audit_sample"
+        ],
+        "type": "string"
+      },
+      "title": "Actions",
+      "type": "array"
+    },
+    "expected_budget": {
+      "$ref": "#/$defs/Budget"
+    },
+    "policy_version": {
+      "title": "Policy Version",
+      "type": "string"
+    },
+    "priority": {
+      "minimum": 0,
+      "title": "Priority",
+      "type": "integer"
+    },
+    "reason_codes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Reason Codes",
+      "type": "array"
+    }
+  },
+  "required": [
+    "actions",
+    "priority",
+    "reason_codes",
+    "policy_version",
+    "expected_budget"
+  ],
+  "title": "RouteDecision",
+  "type": "object"
+}

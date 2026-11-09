@@ -1,0 +1,80 @@
+{
+  "$defs": {
+    "ClassSpec": {
+      "additionalProperties": false,
+      "description": "One project-defined class. ``class_id`` is free text; no public taxonomy is assumed.",
+      "properties": {
+        "aliases": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Aliases",
+          "type": "array"
+        },
+        "class_id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.\\-]+$",
+          "title": "Class Id",
+          "type": "string"
+        },
+        "display_name": {
+          "minLength": 1,
+          "title": "Display Name",
+          "type": "string"
+        },
+        "negative_prompts": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Negative Prompts",
+          "type": "array"
+        },
+        "positive_prompts": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Positive Prompts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "class_id",
+        "display_name",
+        "positive_prompts"
+      ],
+      "title": "ClassSpec",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "classes": {
+      "items": {
+        "$ref": "#/$defs/ClassSpec"
+      },
+      "minItems": 1,
+      "title": "Classes",
+      "type": "array"
+    },
+    "prompt_set_version": {
+      "minLength": 1,
+      "title": "Prompt Set Version",
+      "type": "string"
+    },
+    "task_id": {
+      "minLength": 1,
+      "title": "Task Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id",
+    "prompt_set_version",
+    "classes"
+  ],
+  "title": "TaskSpec",
+  "type": "object"
+}

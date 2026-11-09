@@ -1,0 +1,63 @@
+# Example routing config. All thresholds are placeholders until Phase 5 calibration.
+routing_enabled: false          # feature flag; `vad-route shadow` enables it for that run only
+policy_version: route-v1
+task:
+  task_id: widget-inspection-v1
+  prompt_set_version: p1
+  classes:
+    - class_id: blue_widget_x9   # project-defined; absent from public taxonomies
+      display_name: Blue widget X9
+      positive_prompts: ["a blue X9 widget", "a small blue plastic widget"]
+      negative_prompts: ["a blue bottle cap", "a blue sticker"]
+    - class_id: cracked_seal
+      display_name: Cracked seal
+      positive_prompts: ["a cracked rubber seal"]
+      negative_prompts: ["an intact rubber seal"]
+relevance:
+  raw_scale: unspecified   # set to clip_prompt_softmax_v1 (and re-choose bands) to use --clip-weights
+  raw_high: 0.5     # raw-similarity bands: only valid on the scorer's own scale
+  raw_low: 0.3
+  prob_high: 0.7
+  prob_low: 0.2
+difficulty:
+  medium: 0.35
+  hard: 0.6
+  small_box_area_fraction: 0.001
+  crowding_iou: 0.3
+  severe_crowding: 0.5
+quality:                      # heuristic poor-quality cut-offs (audit sampling only)
+  poor_blur: 0.8
+  poor_exposure: 0.5
+policy:                       # choices the plan left open; defaults = route-v1 as shipped
+  unknown_relevance_as: medium            # medium | high
+  moderate_without_secondary: vlm_then_human   # vlm_then_human | human
+  cross_class_always_review: true
+matching:
+  iou_threshold: 0.5
+  mislocalized_iou: 0.75
+  class_mapping: {}           # secondary class name -> task class_id
+slicing:
+  tile: 640
+  overlap: 0.2
+  include_full_image: true
+  merge_ios: 0.5
+budgets:
+  max_slices: 16
+  max_vlm_calls: 3
+  max_elapsed_ms: 120000
+  max_gpu_ms: 30000
+audit:
+  seed: audit-seed-1
+  low_relevance_sample_rate: 0.05
+  zero_box_sample_rate: 0.1
+  poor_quality_sample_rate: 0.2
+  calibrated: false
+vlm:
+  enabled: false
+  base_url: http://localhost:1234/v1
+  model: qwen3-vl-4b-instruct   # swap to qwen3-vl-8b once loaded in LM Studio
+  timeout_s: 90
+  max_tokens: 200
+  crop_padding: 0.25
+  accept_confirmed_detector_proposals: false
+  absent_rejects: false         # true = a VLM "absent" rejects the box; keep false until measured vs humans

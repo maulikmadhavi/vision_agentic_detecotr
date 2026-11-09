@@ -1,0 +1,107 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "box_xyxy": {
+      "maxItems": 4,
+      "minItems": 4,
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "title": "Box Xyxy",
+      "type": "array"
+    },
+    "class_id": {
+      "title": "Class Id",
+      "type": "string"
+    },
+    "coord_system": {
+      "const": "xyxy_pixel_original",
+      "default": "xyxy_pixel_original",
+      "title": "Coord System",
+      "type": "string"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "model_version": {
+      "minLength": 1,
+      "title": "Model Version",
+      "type": "string"
+    },
+    "parent_ids": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Parent Ids",
+      "type": "array"
+    },
+    "raw_confidence": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Raw Confidence"
+    },
+    "slice_origin": {
+      "anyOf": [
+        {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Slice Origin"
+    },
+    "source": {
+      "enum": [
+        "primary",
+        "secondary",
+        "sahi",
+        "human"
+      ],
+      "title": "Source",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "class_id",
+    "box_xyxy",
+    "source",
+    "model_version"
+  ],
+  "title": "Detection",
+  "type": "object"
+}

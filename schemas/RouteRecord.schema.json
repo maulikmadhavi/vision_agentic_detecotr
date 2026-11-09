@@ -1,0 +1,1205 @@
+{
+  "$defs": {
+    "AnnotationAudit": {
+      "additionalProperties": false,
+      "properties": {
+        "established_by": {
+          "default": "none",
+          "enum": [
+            "human",
+            "calibrated_audit_policy",
+            "none"
+          ],
+          "title": "Established By",
+          "type": "string"
+        },
+        "reason_codes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Reason Codes",
+          "type": "array"
+        },
+        "reviewer_outcome": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reviewer Outcome"
+        },
+        "status": {
+          "enum": [
+            "complete",
+            "needs_review",
+            "unresolved"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "suspected_missing_classes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Suspected Missing Classes",
+          "type": "array"
+        },
+        "unmatched_candidate_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Unmatched Candidate Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "AnnotationAudit",
+      "type": "object"
+    },
+    "BoxFeatures": {
+      "additionalProperties": false,
+      "properties": {
+        "class_ambiguity": {
+          "description": "fraction of boxes overlapping a different-class box",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Class Ambiguity",
+          "type": "number"
+        },
+        "crowding": {
+          "description": "fraction of boxes overlapping another above crowding_iou",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Crowding",
+          "type": "number"
+        },
+        "high_relevance_zero_boxes": {
+          "title": "High Relevance Zero Boxes",
+          "type": "boolean"
+        },
+        "mean_confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mean Confidence"
+        },
+        "min_box_area_fraction": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Box Area Fraction"
+        },
+        "min_confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Confidence"
+        },
+        "num_boxes": {
+          "minimum": 0,
+          "title": "Num Boxes",
+          "type": "integer"
+        },
+        "per_class_counts": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Per Class Counts",
+          "type": "object"
+        }
+      },
+      "required": [
+        "num_boxes",
+        "per_class_counts",
+        "crowding",
+        "class_ambiguity",
+        "high_relevance_zero_boxes"
+      ],
+      "title": "BoxFeatures",
+      "type": "object"
+    },
+    "Budget": {
+      "additionalProperties": false,
+      "properties": {
+        "elapsed_ms": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Elapsed Ms",
+          "type": "number"
+        },
+        "gpu_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gpu Ms"
+        },
+        "slices": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Slices",
+          "type": "integer"
+        },
+        "vlm_calls": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Vlm Calls",
+          "type": "integer"
+        }
+      },
+      "title": "Budget",
+      "type": "object"
+    },
+    "ClassRelevance": {
+      "additionalProperties": false,
+      "properties": {
+        "raw_similarity": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw Similarity"
+        },
+        "relevance_probability": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relevance Probability"
+        }
+      },
+      "title": "ClassRelevance",
+      "type": "object"
+    },
+    "ClassSpec": {
+      "additionalProperties": false,
+      "description": "One project-defined class. ``class_id`` is free text; no public taxonomy is assumed.",
+      "properties": {
+        "aliases": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Aliases",
+          "type": "array"
+        },
+        "class_id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.\\-]+$",
+          "title": "Class Id",
+          "type": "string"
+        },
+        "display_name": {
+          "minLength": 1,
+          "title": "Display Name",
+          "type": "string"
+        },
+        "negative_prompts": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Negative Prompts",
+          "type": "array"
+        },
+        "positive_prompts": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Positive Prompts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "class_id",
+        "display_name",
+        "positive_prompts"
+      ],
+      "title": "ClassSpec",
+      "type": "object"
+    },
+    "Detection": {
+      "additionalProperties": false,
+      "properties": {
+        "box_xyxy": {
+          "maxItems": 4,
+          "minItems": 4,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Box Xyxy",
+          "type": "array"
+        },
+        "class_id": {
+          "title": "Class Id",
+          "type": "string"
+        },
+        "coord_system": {
+          "const": "xyxy_pixel_original",
+          "default": "xyxy_pixel_original",
+          "title": "Coord System",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "model_version": {
+          "minLength": 1,
+          "title": "Model Version",
+          "type": "string"
+        },
+        "parent_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Parent Ids",
+          "type": "array"
+        },
+        "raw_confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw Confidence"
+        },
+        "slice_origin": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Slice Origin"
+        },
+        "source": {
+          "enum": [
+            "primary",
+            "secondary",
+            "sahi",
+            "human"
+          ],
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "class_id",
+        "box_xyxy",
+        "source",
+        "model_version"
+      ],
+      "title": "Detection",
+      "type": "object"
+    },
+    "Difficulty": {
+      "additionalProperties": false,
+      "description": "Miss/mislocalization risk *if a target is present*. Never inferred from zero boxes.",
+      "properties": {
+        "bucket": {
+          "enum": [
+            "easy",
+            "medium",
+            "hard",
+            "unknown"
+          ],
+          "title": "Bucket",
+          "type": "string"
+        },
+        "reasons": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Reasons",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "calibrated",
+            "uncalibrated",
+            "unknown"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "required": [
+        "status",
+        "bucket"
+      ],
+      "title": "Difficulty",
+      "type": "object"
+    },
+    "Disagreement": {
+      "additionalProperties": false,
+      "properties": {
+        "cross_class": {
+          "default": 0,
+          "title": "Cross Class",
+          "type": "integer"
+        },
+        "matched": {
+          "default": 0,
+          "title": "Matched",
+          "type": "integer"
+        },
+        "mean_matched_iou": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mean Matched Iou"
+        },
+        "mislocalized": {
+          "default": 0,
+          "title": "Mislocalized",
+          "type": "integer"
+        },
+        "primary_only": {
+          "default": 0,
+          "title": "Primary Only",
+          "type": "integer"
+        },
+        "primary_only_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Primary Only Ids",
+          "type": "array"
+        },
+        "secondary_only": {
+          "default": 0,
+          "title": "Secondary Only",
+          "type": "integer"
+        },
+        "secondary_only_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Secondary Only Ids",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "computed",
+            "unavailable"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "Disagreement",
+      "type": "object"
+    },
+    "FinalCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "box_xyxy": {
+          "maxItems": 4,
+          "minItems": 4,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Box Xyxy",
+          "type": "array"
+        },
+        "canonical_source_id": {
+          "title": "Canonical Source Id",
+          "type": "string"
+        },
+        "class_id": {
+          "title": "Class Id",
+          "type": "string"
+        },
+        "flags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Flags",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "source_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Source Ids",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "accepted",
+            "candidate",
+            "needs_review",
+            "rejected"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "verification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VerificationResult"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "class_id",
+        "box_xyxy",
+        "status",
+        "source_ids",
+        "canonical_source_id"
+      ],
+      "title": "FinalCandidate",
+      "type": "object"
+    },
+    "ImageRef": {
+      "additionalProperties": false,
+      "properties": {
+        "group_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Group Id"
+        },
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "uri": {
+          "title": "Uri",
+          "type": "string"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "uri",
+        "width",
+        "height",
+        "sha256"
+      ],
+      "title": "ImageRef",
+      "type": "object"
+    },
+    "Quality": {
+      "additionalProperties": false,
+      "properties": {
+        "blur": {
+          "description": "0 sharp .. 1 very blurry (heuristic, uncalibrated)",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Blur",
+          "type": "number"
+        },
+        "exposure": {
+          "description": "fraction of clipped pixels",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Exposure",
+          "type": "number"
+        },
+        "low_resolution": {
+          "title": "Low Resolution",
+          "type": "boolean"
+        },
+        "min_side_px": {
+          "exclusiveMinimum": 0,
+          "title": "Min Side Px",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "blur",
+        "exposure",
+        "min_side_px",
+        "low_resolution"
+      ],
+      "title": "Quality",
+      "type": "object"
+    },
+    "RouteDecision": {
+      "additionalProperties": false,
+      "properties": {
+        "actions": {
+          "items": {
+            "enum": [
+              "standard",
+              "secondary",
+              "sahi",
+              "vlm_verify",
+              "human_review",
+              "audit_sample"
+            ],
+            "type": "string"
+          },
+          "title": "Actions",
+          "type": "array"
+        },
+        "expected_budget": {
+          "$ref": "#/$defs/Budget"
+        },
+        "policy_version": {
+          "title": "Policy Version",
+          "type": "string"
+        },
+        "priority": {
+          "minimum": 0,
+          "title": "Priority",
+          "type": "integer"
+        },
+        "reason_codes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reason Codes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "actions",
+        "priority",
+        "reason_codes",
+        "policy_version",
+        "expected_budget"
+      ],
+      "title": "RouteDecision",
+      "type": "object"
+    },
+    "RunInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "config_hash": {
+          "minLength": 8,
+          "title": "Config Hash",
+          "type": "string"
+        },
+        "difficulty_calibrator": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Difficulty Calibrator"
+        },
+        "policy_version": {
+          "title": "Policy Version",
+          "type": "string"
+        },
+        "primary_artifact_digest": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Primary Artifact Digest"
+        },
+        "primary_model": {
+          "minLength": 1,
+          "title": "Primary Model",
+          "type": "string"
+        },
+        "relevance_artifact_digest": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relevance Artifact Digest"
+        },
+        "relevance_calibrator": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relevance Calibrator"
+        },
+        "relevance_scorer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relevance Scorer"
+        },
+        "secondary_artifact_digest": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Secondary Artifact Digest"
+        },
+        "secondary_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Secondary Model"
+        },
+        "vlm_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Vlm Model"
+        }
+      },
+      "required": [
+        "config_hash",
+        "policy_version",
+        "primary_model"
+      ],
+      "title": "RunInfo",
+      "type": "object"
+    },
+    "StageA": {
+      "additionalProperties": false,
+      "properties": {
+        "domain_distance": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Domain Distance"
+        },
+        "image_relevance_probability": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image Relevance Probability"
+        },
+        "per_class": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ClassRelevance"
+          },
+          "title": "Per Class",
+          "type": "object"
+        },
+        "quality": {
+          "$ref": "#/$defs/Quality"
+        },
+        "relevance_band": {
+          "enum": [
+            "high",
+            "medium",
+            "low",
+            "unknown"
+          ],
+          "title": "Relevance Band",
+          "type": "string"
+        },
+        "relevance_status": {
+          "enum": [
+            "calibrated",
+            "uncalibrated",
+            "unavailable"
+          ],
+          "title": "Relevance Status",
+          "type": "string"
+        },
+        "warnings": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "per_class",
+        "relevance_status",
+        "relevance_band",
+        "quality"
+      ],
+      "title": "StageA",
+      "type": "object"
+    },
+    "StageB": {
+      "additionalProperties": false,
+      "properties": {
+        "difficulty_final": {
+          "$ref": "#/$defs/Difficulty"
+        },
+        "difficulty_pre_secondary": {
+          "$ref": "#/$defs/Difficulty"
+        },
+        "disagreement": {
+          "$ref": "#/$defs/Disagreement"
+        },
+        "features": {
+          "$ref": "#/$defs/BoxFeatures"
+        }
+      },
+      "required": [
+        "difficulty_pre_secondary",
+        "difficulty_final",
+        "features",
+        "disagreement"
+      ],
+      "title": "StageB",
+      "type": "object"
+    },
+    "TaskSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "classes": {
+          "items": {
+            "$ref": "#/$defs/ClassSpec"
+          },
+          "minItems": 1,
+          "title": "Classes",
+          "type": "array"
+        },
+        "prompt_set_version": {
+          "minLength": 1,
+          "title": "Prompt Set Version",
+          "type": "string"
+        },
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "prompt_set_version",
+        "classes"
+      ],
+      "title": "TaskSpec",
+      "type": "object"
+    },
+    "Trace": {
+      "additionalProperties": false,
+      "properties": {
+        "budget_used": {
+          "$ref": "#/$defs/Budget"
+        },
+        "elapsed_ms": {
+          "minimum": 0,
+          "title": "Elapsed Ms",
+          "type": "number"
+        },
+        "events": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Events",
+          "type": "array"
+        },
+        "gpu_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gpu Ms"
+        },
+        "warnings": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "elapsed_ms",
+        "budget_used"
+      ],
+      "title": "Trace",
+      "type": "object"
+    },
+    "VerificationResult": {
+      "additionalProperties": false,
+      "description": "Constrained VLM output. Has no box field by design: a VLM cannot author boxes.",
+      "properties": {
+        "candidate_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Candidate Ids",
+          "type": "array"
+        },
+        "class_id": {
+          "title": "Class Id",
+          "type": "string"
+        },
+        "model_note": {
+          "default": "",
+          "maxLength": 200,
+          "title": "Model Note",
+          "type": "string"
+        },
+        "model_version": {
+          "title": "Model Version",
+          "type": "string"
+        },
+        "reason_code": {
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "region_xyxy": {
+          "anyOf": [
+            {
+              "maxItems": 4,
+              "minItems": 4,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Region Xyxy"
+        },
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "verdict": {
+          "enum": [
+            "present",
+            "absent",
+            "uncertain"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "class_id",
+        "verdict",
+        "reason_code",
+        "model_version"
+      ],
+      "title": "VerificationResult",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "completeness": {
+      "$ref": "#/$defs/AnnotationAudit"
+    },
+    "final_candidates": {
+      "items": {
+        "$ref": "#/$defs/FinalCandidate"
+      },
+      "title": "Final Candidates",
+      "type": "array"
+    },
+    "image": {
+      "$ref": "#/$defs/ImageRef"
+    },
+    "primary_candidates": {
+      "items": {
+        "$ref": "#/$defs/Detection"
+      },
+      "title": "Primary Candidates",
+      "type": "array"
+    },
+    "record_id": {
+      "title": "Record Id",
+      "type": "string"
+    },
+    "route": {
+      "$ref": "#/$defs/RouteDecision"
+    },
+    "run": {
+      "$ref": "#/$defs/RunInfo"
+    },
+    "sahi_candidates": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Detection"
+      },
+      "title": "Sahi Candidates",
+      "type": "array"
+    },
+    "sahi_raw_candidates": {
+      "default": [],
+      "description": "per-tile detections before merging",
+      "items": {
+        "$ref": "#/$defs/Detection"
+      },
+      "title": "Sahi Raw Candidates",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "secondary_candidates": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Detection"
+      },
+      "title": "Secondary Candidates",
+      "type": "array"
+    },
+    "stage_a": {
+      "$ref": "#/$defs/StageA"
+    },
+    "stage_b": {
+      "$ref": "#/$defs/StageB"
+    },
+    "task": {
+      "$ref": "#/$defs/TaskSpec"
+    },
+    "trace": {
+      "$ref": "#/$defs/Trace"
+    },
+    "verifications": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/VerificationResult"
+      },
+      "title": "Verifications",
+      "type": "array"
+    }
+  },
+  "required": [
+    "record_id",
+    "image",
+    "task",
+    "run",
+    "stage_a",
+    "primary_candidates",
+    "stage_b",
+    "route",
+    "final_candidates",
+    "completeness",
+    "trace"
+  ],
+  "title": "RouteRecord",
+  "type": "object"
+}

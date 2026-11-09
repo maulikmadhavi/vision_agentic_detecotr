@@ -1,0 +1,65 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "established_by": {
+      "default": "none",
+      "enum": [
+        "human",
+        "calibrated_audit_policy",
+        "none"
+      ],
+      "title": "Established By",
+      "type": "string"
+    },
+    "reason_codes": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Reason Codes",
+      "type": "array"
+    },
+    "reviewer_outcome": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reviewer Outcome"
+    },
+    "status": {
+      "enum": [
+        "complete",
+        "needs_review",
+        "unresolved"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "suspected_missing_classes": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Suspected Missing Classes",
+      "type": "array"
+    },
+    "unmatched_candidate_ids": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Unmatched Candidate Ids",
+      "type": "array"
+    }
+  },
+  "required": [
+    "status"
+  ],
+  "title": "AnnotationAudit",
+  "type": "object"
+}
