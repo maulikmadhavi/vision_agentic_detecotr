@@ -25,6 +25,7 @@ from .interfaces import Detector, RelevanceScorer
 from .metrics import LabelError, evaluate, evidence_status, image_results, load_ground_truth
 from .pipeline import RoutingPipeline
 from .replay import PrecomputedDetector, PrecomputedRelevance
+from .sample import group_manifest
 from .store import RouteStore, StoreLockedError, job_lock
 from .schemas import ErrorRecord, RouteRecord, TaskSpec, export_json_schemas
 from .task_config import RoutingConfig, load_config
@@ -41,6 +42,12 @@ def _parser() -> argparse.ArgumentParser:
     e.add_argument("--trace", required=True, help="route_trace.jsonl of the shadow run")
     e.add_argument("--out", required=True, help="metrics JSON to write")
     e.add_argument("--iou", type=float, default=0.5, help="working IoU threshold for recall, false positives, misses")
+    sample = sub.add_parser("sample", help="tooling for the human-checked trial sample")
+    sample_sub = sample.add_subparsers(dest="sample_cmd", required=True)
+    g = sample_sub.add_parser("group", help="group exact and near-duplicate images; list pairs for confirmation")
+    g.add_argument("--images", required=True, help="image directory or JSONL manifest")
+    g.add_argument("--out", required=True, help="groups JSON to write")
+    g.add_argument("--max-hamming", type=int, default=6, help="near-duplicate dHash distance that merges two images")
     for name in ("shadow", "legacy"):
         p = sub.add_parser(name)
         p.add_argument("--config", required=True)
@@ -85,6 +92,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "evaluate":
         return _run_evaluate(parser, args)
+    if args.cmd == "sample":
+        return _run_sample(args)
 
     cfg = load_config(args.config)
     out = Path(args.out)
@@ -136,6 +145,18 @@ def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     out.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     print(f"evidence_status: {metrics['evidence_status']}")
     print(f"metrics written to {out}")
+    return 0
+
+
+def _run_sample(args: argparse.Namespace) -> int:
+    doc = group_manifest(load_manifest(args.images), args.max_hamming)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+    groups = {v["group_id"] for v in doc["images"].values()}
+    to_check = sum(1 for p in doc["pairs"] if p["reason"] == "near_duplicate")
+    print(f"{len(doc['images'])} images in {len(groups)} groups; {to_check} near-duplicate pairs to confirm; "
+          f"{len(doc['unreadable'])} unreadable; written to {out}")
     return 0
 
 
