@@ -1,6 +1,6 @@
 # Specification: adaptive routing for custom object detection
 
-Requirements and acceptance criteria for this project. Status of each item is tracked on the [project board](project_board.md); this document changes only when requirements change.
+Requirements, acceptance criteria and the implemented execution flow for this project. Status of each item is tracked on the [project board](project_board.md). Keep the execution diagrams aligned with runtime behavior; the later calibration and rollout requirements describe the intended release gates.
 
 Source: the original plan (Part B of `git show 208713e:docs/project_board.md`), without the Codex execution prompt. The repository layout below is as built.
 
@@ -20,24 +20,187 @@ Keep raw embedding similarity, calibrated probability, quality signals and diffi
 
 ## Processing graph
 
+The following describes the implementation at `f976203`. The runtime is ordinary Python orchestration, not a state-machine framework. State names in the diagrams explain control flow; only the schemas, cached step payloads, records and errors described below are persisted. Source links are relative to this document.
+
 ```mermaid
-flowchart LR
-  A[Image + task spec] --> B[Stage A: cheap image signals and relevance]
-  B --> C[Primary detector]
-  C --> D[Stage B: boxes, confidence, uncertainty]
-  D --> E[Deterministic router]
-  E -->|standard| F[Primary candidates]
-  E -->|secondary| G[Independent detector]
-  E -->|sliced| H[SAHI through detector adapter]
-  G --> I[Match, disagree, fuse]
-  H --> I
-  F --> J[Completeness audit]
-  I --> J
-  J --> K[Bounded VLM verification or human queue]
-  K --> L[Versioned annotations + route trace]
-  L --> M[Train on mutable training data]
-  M --> N[Frozen benchmark evaluation]
+flowchart TD
+  CLI["vad-route: parse arguments and load task"] --> Mode{"Command?"}
+  Mode -->|export-schema| Schemas["Write JSON Schemas"]
+  Mode -->|legacy| Legacy["Primary detector only; export legacy annotations"]
+  Mode -->|shadow| Lock["Enable routing for this run; acquire output lock"]
+  Lock --> Image["Next manifest image: load, validate and hash"]
+  Image --> Cache{"Final record exists for this run key?"}
+  Image -->|unreadable or corrupt| Error["Persist per-image ErrorRecord"]
+  Cache -->|yes| Reuse["Reuse completed RouteRecord"]
+  Cache -->|no| A["Stage A: quality and relevance; reuse or persist"]
+  A --> Primary["Primary detection; reuse or persist normalized boxes"]
+  Primary --> B["Stage B: box features and pre-secondary difficulty"]
+  B --> Route["Compute or reuse persisted route decision"]
+  Route --> Secondary["Optional secondary: action, capability and budget checks"]
+  Secondary --> Slicing["Optional slicing: action, capability and per-tile budget checks"]
+  Slicing --> Fusion["Match and fuse; retain provenance; assign candidate statuses"]
+  Fusion --> Verify["Optional bounded VLM: candidates, then missing classes"]
+  Verify --> Audit["Completeness audit: complete, needs_review or unresolved"]
+  Audit --> Save["Persist RouteRecord and trace"]
+  Primary -->|failure| Error
+  Reuse --> Next{"More images?"}
+  Save --> Next
+  Error --> Next
+  Next -->|yes| Image
+  Next -->|no| Export["Current-run annotations, route_trace.jsonl and report.json"]
 ```
+
+`standard`, `secondary`, `sahi`, `vlm_verify`, `human_review` and `audit_sample` are **combinable actions**, not mutually exclusive processing states. The pipeline checks membership in the action list and executes secondary before slicing, regardless of the list's order. `human_review` records review requirements; it does not pause the process or launch a review UI. Training and frozen benchmarking remain downstream workflows, not steps performed by `vad-route shadow`.
+
+### Command and batch boundaries
+
+[cli.main](../src/routing/cli.py) constructs providers and loads the manifest before entering the shadow output lock. Invalid command/configuration, manifest-loading errors and setup failures stop the command; they are outside the per-image error queue. `StoreLockedError` returns exit code 2. Shadow mode explicitly sets `routing_enabled=True` for that invocation; the default configuration remains disabled. The legacy branch calls `legacy_predict` directly and does not use routed per-image recovery.
+
+[RoutingPipeline.run](../src/routing/pipeline.py) processes manifest entries sequentially. Each `process` returns either a `RouteRecord` or `ErrorRecord`, so an unreadable image or primary inference failure does not stop later valid entries. This assumes error persistence itself succeeds. Unexpected uncaught errors during scoring, fusion, audit or record construction also become per-image errors, tagged with the last `_step`.
+
+### Per-image execution state machine
+
+```mermaid
+stateDiagram-v2
+  [*] --> Loading
+  Loading --> ErrorQueued: invalid image
+  Loading --> Lookup: valid image and run key
+  state lookup_result <<choice>>
+  Lookup --> lookup_result
+  lookup_result --> Reused: final record found
+  lookup_result --> StageA: no final record
+  StageA --> Primary: relevance result or unavailable evidence
+  Primary --> ErrorQueued: detector failure
+  Primary --> StageB: valid result including zero boxes
+  StageB --> RouteReady: compute or reuse decision
+  RouteReady --> Secondary: optional action gate
+  Secondary --> Slicing: success, skipped or failure recorded
+  Slicing --> Fusion: success, skipped or partial result recorded
+  Fusion --> Verification: candidates and disagreement ready
+  Verification --> Audit: verified, skipped or uncertain
+  Audit --> Persisting: completeness assigned
+  Persisting --> Recorded: store write succeeds
+  Reused --> [*]
+  Recorded --> [*]
+  ErrorQueued --> [*]
+```
+
+| Stage / source | What happens | State retained for explanation or recovery |
+|---|---|---|
+| Loading / `image_inputs.load_image` | Read bytes, verify/decode, convert to RGB and build an `ImageRef` with byte digest. | An invalid image produces an error; no detection is attempted. |
+| Lookup / `process`, `record_key` | Combine image identity with `RunInfo`, including configuration/model identities and available artifact digests. | A final-record hit returns immediately after image validation. |
+| Stage A / `scoring.stage_a` | Quality signals plus optional per-class relevance; a scorer exception yields unavailable relevance and a warning. | `stage_a` cache includes failures represented as unavailable evidence; resume reuses it. |
+| Primary / `_cached_detect` | Run or replay primary predictions and map valid boxes to original-image coordinates. An explicit empty prediction row is valid; an omitted replay row raises. | `primary` cache stores detections, warnings and measured GPU time. |
+| Stage B / `box_features`, `estimate_difficulty` | Calculate features and `difficulty_pre_secondary`; zero boxes imply unknown difficulty. | Derived again from cached inputs until the final record is saved. |
+| Route / `policy.route` | Apply ordered rules and available capabilities; persist before optional escalation. | `route` contains actions, reasons, priority and expected budget. |
+| Secondary and slicing | Check the action, adapter and budget; normalize/fuse tile results. Optional failures accumulate review reasons. | `secondary` and `sahi` caches; slicing retains raw predictions, merged predictions, count and stop reason. |
+| Fusion / `_candidates` | Match primary/secondary detections, derive disagreement, fuse all detector sources and assign initial statuses. | Preserve both difficulty snapshots. `difficulty_final` is recomputed only when secondary ran; it does not trigger a second routing pass. |
+| Verification / `_verify` | Check reviewable candidates in stable order, then high-relevance classes without an accepted box, using one shared call cap. | Per-request result/attempt markers; VLM outcomes cannot create geometry. |
+| Audit and persistence / `completeness.audit`, `RouteStore` | Evaluate coverage and open evidence; save the final trace and record. | Final completeness and all source/candidate/verification records. |
+
+Exceptions not drawn individually in the state diagram follow `process`'s outer error handler. A handled relevance, secondary or slicing failure stays on the normal path with unknown evidence or review reasons. A VLM failure becomes `uncertain` when a request was attempted. Skipping a request on a budget leaves the candidate unchanged and adds a failure reason.
+
+### Route selection and budget guards
+
+[policy.route](../src/routing/policy.py) applies the following main branches, then adds calibrated-missing-class and sampled-quality review requirements. Availability changes the selected actions.
+
+| Evidence, in branch order | Route behavior |
+|---|---|
+| Low relevance, zero primary boxes | Standard path plus a deterministic sampled audit; no automatic discard. |
+| Low relevance with boxes | Standard plus VLM verification, or human review when VLM is unavailable. |
+| Non-low relevance, zero boxes | High relevance escalates; moderate relevance takes the moderate path. Unknown relevance uses the configured medium/high interpretation. |
+| Non-low relevance with boxes and hard/small/crowded evidence | Escalate: plan slicing if available and within slice count, add secondary and VLM when configured; otherwise record unavailable capabilities/review. |
+| Remaining medium/unknown difficulty or moderate relevance | Secondary if available, plus VLM when available. Without secondary, use the configured VLM-then-human or human fallback. |
+| Remaining high relevance and low difficulty | Standard path. |
+
+Unknown relevance is never treated as low. An omitted calibrated class adds `human_review` and never falls back to raw probability thresholds. Poor-quality sampling can add review to any branch.
+
+Budgets are cooperative guards: Stage A and primary still run for every valid uncached image. Elapsed time is checked before optional work and before each slice; an in-flight call can exceed that budget. GPU limits use adapter-measured time only, and become unenforceable when the aggregate is unknown (`None`). Slicing returns partial results with a stop reason; it does not silently claim a complete pass. VLM call counts include cached answers reached through `ask`, preserving the logical per-image cap on resume. Provider timeouts are separate from the pipeline elapsed budget; the WeMM client currently retries a transport failure once.
+
+### Candidate status state machine
+
+[RoutingPipeline._candidates](../src/routing/pipeline.py) initially accepts an unflagged primary-backed fused box. A non-primary proposal begins as `candidate`; flagged primary-backed boxes begin as `needs_review`. Examples of flags are cross-class conflict, mislocalization, primary-only disagreement, low relevance and missing planned confirmation.
+
+```mermaid
+stateDiagram-v2
+  [*] --> Fused
+  Fused --> candidate: no primary source
+  Fused --> needs_review: primary source with flags
+  Fused --> accepted: primary source without flags
+  candidate --> Checking: VLM selected and budget permits
+  needs_review --> Checking: VLM selected and budget permits
+  Checking --> needs_review: guarded cross-class conflict
+  Checking --> accepted: present and acceptance permitted
+  Checking --> needs_review: present proposal but acceptance disabled
+  Checking --> needs_review: uncertain
+  Checking --> needs_review: absent and absent_rejects is false
+  Checking --> rejected: absent and absent_rejects is true
+```
+
+`Checking` and `Fused` are explanatory states, not schema values. If verification is skipped, `candidate`/`needs_review` remains unchanged. `_candidate_status_after_verification` checks the cross-class guard **before** interpreting the verdict. A `present` verdict can accept an existing detector proposal only when `accept_confirmed_detector_proposals` permits it; the VLM never authors or moves boxes. Accepted and rejected candidates are not re-verified during this pass.
+
+### Image completeness is a separate decision
+
+[completeness.audit](../src/routing/completeness.py) evaluates the entire image after candidate verification. Its statuses do not replace box statuses:
+
+1. Collect unmatched `candidate`/`needs_review` boxes, failures and suspected missing classes. A high-relevance class without an accepted box is unresolved when its check is missing, uncertain or reports an unannotated instance. An uncertain candidate verification also creates unresolved evidence.
+2. A calibrated class with missing probability and no accepted box remains unresolved. A VLM answer cannot resolve that missing relevance evidence.
+3. Establish authority from `human_outcome`, otherwise a configured calibrated audit policy, otherwise `none`.
+4. Apply the precedence below. A human `complete` cannot clear unmatched candidates, unresolved evidence or failed escalation without adjudicating those findings.
+
+```mermaid
+flowchart TD
+  Evidence["Collect open findings and authority"] --> Human{"Human complete and no open findings?"}
+  Human -->|yes| Complete["complete"]
+  Human -->|no| Unknown{"Unresolved evidence?"}
+  Unknown -->|yes| Unresolved["unresolved"]
+  Unknown -->|no| Review{"Unmatched boxes, failure, no authority, or human_review action?"}
+  Review -->|yes| NeedsReview["needs_review"]
+  Review -->|no| Complete
+```
+
+The current pipeline does not pass human outcomes or reference annotations into `audit`; those parameters are helper-level capabilities. Reviewer ingestion and re-auditing are future work. With no human outcome and no calibrated audit policy, even an image whose boxes are all accepted remains `needs_review` unless unresolved evidence requires the stronger `unresolved` status.
+
+### Restart and VLM request recovery
+
+[RouteStore](../src/routing/store.py) persists independent step payloads; it does not save a single execution-state enum. Restart begins at image loading, returns a saved final record if present, otherwise traverses the same stages and reuses the available step results.
+
+```mermaid
+stateDiagram-v2
+  [*] --> ResultLookup
+  state result_available <<choice>>
+  ResultLookup --> result_available
+  result_available --> CachedAnswer: result exists
+  result_available --> AttemptLookup: no result
+  state attempt_available <<choice>>
+  AttemptLookup --> attempt_available
+  attempt_available --> Interrupted: attempt marker exists
+  attempt_available --> MarkAttempt: no attempt marker
+  MarkAttempt --> Sending: persist marker before VLM call
+  Sending --> Validating: response received
+  Sending --> Uncertain: exception or timeout
+  Validating --> Answer: valid request binding
+  Validating --> Uncertain: contradictory binding
+  Interrupted --> Uncertain: never resend this request
+  Answer --> SaveAnswer
+  Uncertain --> SaveAnswer
+  CachedAnswer --> [*]
+  SaveAnswer --> [*]
+```
+
+This request machine runs only when `_verify` reaches the request within its budget. Cache keys are `vlm:<request-id>` and `vlm_attempt:<request-id>`. Request binding includes class, candidate IDs and region as well as request ID. Malformed provider responses are normalized to uncertain by the adapter. If the process dies after the marker but before the answer is persisted, resume records `vlm_interrupted` as uncertain instead of repeating inference—even if the original call was never sent. This is the deliberate at-most-once tradeoff.
+
+Detector steps have no equivalent attempt marker. A crash after inference but before its cache write can repeat that detector call. Sliced inference is cached after the sliced operation returns, not after every tile, so interruption can repeat tiles. A saved final record is reused; its historical timings/warnings are not recomputed. Changing configuration or recorded artifact identity creates a different run key; changing an unverified remote model behind the same identity does not automatically invalidate SQLite results.
+
+### Output and downstream boundary
+
+Shadow mode writes only records returned for the current invocation:
+
+- `annotations.json`: all valid routed images with completeness metadata, and only `accepted` candidate boxes, converted from xyxy to COCO-style xywh.
+- `route_trace.jsonl`: complete `RouteRecord` values, including proposals, provenance, verifications and completeness.
+- `report.json`: route/cost summaries, relevance-scorer failure counts and the current invocation's per-image errors.
+
+An image may export accepted boxes while still being `needs_review` or `unresolved`; accepted geometry does not prove full coverage. The current export does **not** enforce a complete-images-only training gate. Frozen-split enforcement, human adjudication, actual trainer integration and promotion remain requirements described below and tracked on the board.
 
 ### Two-stage scoring
 
