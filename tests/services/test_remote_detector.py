@@ -154,3 +154,10 @@ def test_model_revision_is_part_of_the_record_key(tmp_path):
     keys = {RoutingPipeline(config(), detector(None, model_revision=r), RouteStore(":memory:")).record_key(ref)
             for r in ("rev-1", "rev-2")}
     assert len(keys) == 2
+
+
+def test_class_outside_the_task_raises_before_any_call():
+    calls = []
+    with pytest.raises(RemoteDetectorError, match="not in task"):
+        detector(server(lambda b, i: ok(b, i), calls)).detect(_img(), "img1", (CLASS_A, "unknown_q"))
+    assert calls == []

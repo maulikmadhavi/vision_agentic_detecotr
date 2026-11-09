@@ -66,6 +66,8 @@ class RemoteDetector:
         png = buf.getvalue()
         sha = hashlib.sha256(png).hexdigest()
         prompts = {c.class_id: c.positive_prompts for c in self.task.classes}
+        if unknown := sorted(set(class_ids) - set(prompts)):
+            raise RemoteDetectorError(f"class_ids not in task: {unknown}")
         req = DetectRequest(
             request_id=stable_id("dreq", [image_id, sha, self.model_version]),
             image_png_b64=base64.b64encode(png).decode(), image_sha256=sha,
