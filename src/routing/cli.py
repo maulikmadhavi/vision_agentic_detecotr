@@ -14,15 +14,16 @@ import os
 import sys
 from pathlib import Path
 
-from services.lmstudio import OpenAICompatibleVerifier
-from services.replay import PrecomputedDetector, PrecomputedRelevance
+from service_detector_gdino.client import RemoteDetector
+from service_detector_vlm.openai_service_call import OpenAICompatibleVerifier
+from services_embedding.client import WEMM_TEXT_SCALE, WeMMMCPRelevanceScorer
+
 from .evaluation import route_report
 from .export import export_legacy, export_routed
 from .image_inputs import load_image, load_manifest
 from .pipeline import RoutingPipeline
+from .replay import PrecomputedDetector, PrecomputedRelevance
 from .store import RouteStore, StoreLockedError, job_lock
-from services.http_detector import RemoteDetector
-from services.wemm_mcp import WEMM_TEXT_SCALE, WeMMMCPRelevanceScorer
 from .schemas import ErrorRecord, RouteRecord, export_json_schemas
 from .task_config import load_config
 

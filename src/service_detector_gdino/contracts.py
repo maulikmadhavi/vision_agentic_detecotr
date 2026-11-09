@@ -15,7 +15,7 @@ SERVICE_SCHEMA_VERSION = "svc-1.0"
 
 
 class Strict(BaseModel):
-    """Same config as ``routing.schemas.Strict`` (a test checks they match); kept here so servers need only services.*."""
+    """Same config as ``routing.schemas.Strict`` (a test checks they match); kept here so the server needs no routing import."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 

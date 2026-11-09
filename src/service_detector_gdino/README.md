@@ -1,14 +1,14 @@
 # Model services
 
 Separately run model servers that the router calls over HTTP (svc-1.0 contract in
-`src/services/contracts.py`). Each server has its own pixi workspace and lock; the
+`src/service_detector_gdino/contracts.py`). Each server has its own pixi workspace and lock; the
 root `pyproject.toml` / `pixi.lock` are not involved, and the `routing` package never imports
 server code. Servers bind to `127.0.0.1` by default, so images stay on this machine.
 
 The server environment lives outside the source tree: this workspace's local pixi config
 sets `detached-environments = true` (run once per machine:
-`pixi config set --local -m src/services/grounding_dino/pixi.toml detached-environments true`).
-Without it, pixi would create a multi-GB `.pixi/` env inside `src/services/grounding_dino/`
+`pixi config set --local -m src/service_detector_gdino/pixi.toml detached-environments true`).
+Without it, pixi would create a multi-GB `.pixi/` env inside `src/service_detector_gdino/`
 (gitignored, but walked by anything that scans `src/`).
 
 ## grounding_dino (detector)
@@ -22,10 +22,10 @@ Without it, pixi would create a multi-GB `.pixi/` env inside `src/services/groun
 | Class rule | One forward pass per requested class, prompted only with that class's positive prompts. Every box from a pass belongs to that class; returned text spans are ignored. |
 
 ```bash
-pixi run -m src/services/grounding_dino/pixi.toml fetch   # one-time pinned download
-pixi run -m src/services/grounding_dino/pixi.toml test    # server tests, fake model (no weights/GPU)
-pixi run -m src/services/grounding_dino/pixi.toml smoke   # real model: checks + measurements (JSON)
-pixi run -m src/services/grounding_dino/pixi.toml serve   # start the server
+pixi run -m src/service_detector_gdino/pixi.toml fetch   # one-time pinned download
+pixi run -m src/service_detector_gdino/pixi.toml test    # server tests, fake model (no weights/GPU)
+pixi run -m src/service_detector_gdino/pixi.toml smoke   # real model: checks + measurements (JSON)
+pixi run -m src/service_detector_gdino/pixi.toml serve   # start the server
 ```
 
 Then, from the repo root: `pixi run test-gdino` (live client test), or

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from routing.interfaces import DetectorResult, RawDetection
+from .interfaces import DetectorResult, RawDetection
 
 
 class MissingPrediction(LookupError):

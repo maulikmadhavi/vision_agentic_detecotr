@@ -13,7 +13,7 @@ import pytest
 
 from routing import cli
 from routing.interfaces import RawDetection
-from services.lmstudio import OpenAICompatibleVerifier
+from service_detector_vlm.openai_service_call import OpenAICompatibleVerifier
 from routing.evaluation import IsolationError, assert_not_frozen, check_isolation, load_frozen, lock_frozen_set
 from routing.export import load_annotations
 from routing.matching import iou
@@ -148,7 +148,7 @@ import json, sys
 sys.path.insert(0, sys.argv[2])
 from pathlib import Path
 from tests.routing.helpers import make_fixture, config, BlobDetector, ScriptedRelevance
-from services.replay import PrecomputedDetector, PrecomputedRelevance
+from routing.replay import PrecomputedDetector, PrecomputedRelevance
 from routing.image_inputs import load_manifest
 from routing.pipeline import RoutingPipeline
 from routing.store import RouteStore
@@ -798,7 +798,7 @@ def test_r2_explicit_empty_row_is_a_valid_zero_box_result(tmp_path):
     ([{"image_id": "a", "detections": []}, {"image_id": "a", "detections": []}], "duplicate image_id"),
 ])
 def test_r2_precomputed_rows_must_be_explicit_and_unique(tmp_path, rows, match):
-    from services.replay import PrecomputedDetector
+    from routing.replay import PrecomputedDetector
     p = tmp_path / "p.jsonl"
     p.write_text("".join(json.dumps(r) + "\n" for r in rows))
     with pytest.raises(ValueError, match=match):
@@ -806,7 +806,7 @@ def test_r2_precomputed_rows_must_be_explicit_and_unique(tmp_path, rows, match):
 
 
 def test_r2_changed_precomputed_file_with_same_version_does_not_reuse_records(tmp_path):
-    from services.replay import PrecomputedDetector
+    from routing.replay import PrecomputedDetector
     entry = _img(tmp_path)
     preds = tmp_path / "preds.jsonl"
     store_path = tmp_path / "routes.sqlite"

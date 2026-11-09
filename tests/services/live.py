@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 from routing.task_config import VLMConfig
-from services.lmstudio import OpenAICompatibleVerifier
+from service_detector_vlm.openai_service_call import OpenAICompatibleVerifier
 
 GDINO_URL = os.environ.get("VAD_GDINO_URL", "http://127.0.0.1:8001")
 
@@ -30,7 +30,7 @@ def _port_open(url: str) -> bool:
 def require_gdino() -> str:
     if not _port_open(GDINO_URL):
         pytest.skip(f"Grounding DINO server not reachable at {GDINO_URL} "
-                    "(start it: pixi run -m src/services/grounding_dino/pixi.toml serve)")
+                    "(start it: pixi run -m src/service_detector_gdino/pixi.toml serve)")
     return GDINO_URL
 
 

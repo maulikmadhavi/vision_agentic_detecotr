@@ -203,7 +203,7 @@ def test_scorer_with_declared_scale_requires_matching_config(tmp_path):
 def test_core_package_imports_without_torch():
     import subprocess
     import sys
-    code = "import sys; sys.modules['torch'] = None; import routing.cli, routing.pipeline, services.runtime"
+    code = "import sys; sys.modules['torch'] = None; import routing.cli, routing.pipeline, service_detector_gdino.runtime"
     assert subprocess.run([sys.executable, "-c", code]).returncode == 0
 
 

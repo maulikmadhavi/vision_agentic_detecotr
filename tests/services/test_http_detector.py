@@ -15,7 +15,7 @@ from routing.interfaces import RawDetection
 from routing.image_inputs import ManifestEntry
 from routing.pipeline import RoutingPipeline
 from routing.store import RouteStore
-from services.http_detector import RemoteDetector, RemoteDetectorError
+from service_detector_gdino.client import RemoteDetector, RemoteDetectorError
 from routing.schemas import ErrorRecord, RouteRecord
 from routing.slicing import run_sliced
 from routing.task_config import SlicingConfig

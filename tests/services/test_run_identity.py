@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from services.lmstudio import OpenAICompatibleVerifier
-from services.replay import PrecomputedDetector, PrecomputedRelevance
+import pytest
+
+from service_detector_vlm.openai_service_call import OpenAICompatibleVerifier
+from routing.replay import PrecomputedDetector, PrecomputedRelevance
 from routing.pipeline import RoutingPipeline
 from routing.store import RouteStore
 from routing.schemas import ImageRef
@@ -24,30 +26,31 @@ def test_replay_and_vlm_run_key_is_unchanged_by_moves_and_renames(tmp_path):
     assert pipe.record_key(ref) == "rec-bf54146413d69a17"
 
 
-def test_services_resolves_to_src_not_the_tests_package():
+def test_integration_packages_resolve_to_src_and_the_old_services_package_is_gone():
     # tests/ and tests/services/ are packages (tests/__init__.py), so pytest's default "prepend"
-    # import mode imports them as tests.services, never as a top-level `services` that would
-    # shadow src/services.
+    # import mode imports them as tests.services; nothing may shadow the src packages.
+    import importlib
     from pathlib import Path
 
-    import routing
-    import services
-    import services.contracts as contracts
+    import service_detector_gdino.contracts as contracts
 
-    assert Path(services.__file__).parent.name == "services" and Path(services.__file__).parent.parent.name == "src"
-    assert Path(routing.__file__).parent.parent.name == "src"
+    for name in ("routing", "services_embedding", "service_detector_vlm", "service_detector_gdino"):
+        pkg = Path(importlib.import_module(name).__file__).parent
+        assert (pkg.name, pkg.parent.name) == (name, "src")
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("services")
     assert contracts.SERVICE_SCHEMA_VERSION == "svc-1.0"
     assert __name__ == "tests.services.test_run_identity"
 
 
 def test_service_contracts_import_no_routing_and_keep_the_strict_config():
-    # The server needs only services.*; contracts carries its own copy of the Strict base.
+    # The server needs only service_detector_gdino.*; contracts carries its own copy of the Strict base.
     import subprocess
     import sys
 
     from routing.schemas import Strict as RoutingStrict
-    from services.contracts import Strict as ContractStrict
+    from service_detector_gdino.contracts import Strict as ContractStrict
 
     assert ContractStrict is not RoutingStrict and ContractStrict.model_config == RoutingStrict.model_config
-    code = "import sys, services.contracts; sys.exit(any(m.split('.')[0] == 'routing' for m in sys.modules))"
+    code = "import sys, service_detector_gdino.contracts; sys.exit(any(m.split('.')[0] == 'routing' for m in sys.modules))"
     assert subprocess.run([sys.executable, "-c", code]).returncode == 0

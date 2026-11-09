@@ -11,7 +11,7 @@ from PIL import Image
 
 from routing import cli
 from routing.schemas import VerificationRequest
-from services.lmstudio import OpenAICompatibleVerifier
+from service_detector_vlm.openai_service_call import OpenAICompatibleVerifier
 
 from ..routing.helpers import CLASS_A, config, make_fixture
 

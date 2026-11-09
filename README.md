@@ -87,7 +87,7 @@ The live tests and `--wemm` / `--vlm` need assets that pixi does not install:
 |---|---|---|
 | WeMM embedding server | MCP streamable-http server reporting `meta.backend=wemm`, `meta.model=tencent/WeMM-Embedding-4B`, `meta.dim=2560` | `$VAD_WEMM_URL` (set it in your shell or an untracked, gitignored file; never commit the address) |
 | LM Studio | OpenAI-compatible server at `http://localhost:1234/v1` with model ID `qwen3-vl-4b-instruct` loaded | `vlm.base_url` / `vlm.model` in the config |
-| GPU | CUDA-capable NVIDIA GPU for the Grounding DINO server (CUDA 12.8 torch in its own pixi workspace) | see `src/services/grounding_dino/README.md` |
+| GPU | CUDA-capable NVIDIA GPU for the Grounding DINO server (CUDA 12.8 torch in its own pixi workspace) | see `src/service_detector_gdino/README.md` |
 
 ```powershell
 $env:VAD_WEMM_URL = "<your WeMM MCP endpoint>"                       # PowerShell
@@ -115,13 +115,15 @@ src/routing/        package `routing`: routing logic (imports no server code)
   evaluation.py    split isolation, frozen-set lock, route/cost report
   export.py        COCO-style versioned export + loader
   cli.py           vad-route
-src/services/       package `services`: model-service clients and servers
-  contracts.py      svc-1.0 wire models (detector server <-> client)
-  http_detector.py  RemoteDetector (svc-1.0 HTTP client)
-  wemm_mcp.py       WeMMMCPRelevanceScorer (WeMM MCP relevance client)
-  lmstudio.py       OpenAICompatibleVerifier (VLM verifier client)
-  replay.py         precomputed detections / relevance from JSONL
-  runtime.py        file hashing + measured GPU time helpers
-  grounding_dino/       Grounding DINO server; own pixi workspace (see its README.md)
+  replay.py        precomputed detections / relevance from JSONL (file replay, not a model service)
+src/services_embedding/   package `services_embedding`
+  client.py        WeMMMCPRelevanceScorer (WeMM MCP relevance client)
+src/service_detector_vlm/ package `service_detector_vlm`
+  openai_service_call.py  OpenAICompatibleVerifier (VLM verifier client; never authors boxes)
+src/service_detector_gdino/  package `service_detector_gdino`; also its own pixi workspace (see its README.md)
+  contracts.py     svc-1.0 wire models (detector server <-> client)
+  client.py        RemoteDetector (svc-1.0 HTTP client)
+  server.py        Grounding DINO server;  smoke.py  real-model checks
+  runtime.py       file hashing + measured GPU time helpers
 tests/routing/, tests/services/
 ```

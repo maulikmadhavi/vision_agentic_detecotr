@@ -1,6 +1,6 @@
 """Live shadow run with all three services at once (excluded by default; synthetic images only).
 
-Needs the Grounding DINO server (pixi run -m src/services/grounding_dino/pixi.toml serve), LM Studio
+Needs the Grounding DINO server (pixi run -m src/service_detector_gdino/pixi.toml serve), LM Studio
 with qwen3-vl-4b-instruct, and the WeMM server at $VAD_WEMM_URL. Skips if any one is unreachable.
 Run:  VAD_WEMM_URL=<url> pixi run test-e2e
 """

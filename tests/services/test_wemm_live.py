@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 from PIL import Image, ImageDraw
 
-from services.wemm_mcp import WeMMMCPRelevanceScorer
+from services_embedding.client import WeMMMCPRelevanceScorer
 
 from .live import require_wemm
 
