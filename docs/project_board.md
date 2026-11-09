@@ -9,7 +9,7 @@ This file merges what used to be three documents: the plan (`adaptive_object_det
 - **Part C — Integration map:** greenfield defaults, hardware, fixture, assumptions.
 - **Part D — Implementation log:** dated rationale for what was built.
 
-**Snapshot:** phases 0–4 done, Phase 5 started, Phase 6 not started. Routing is disabled by default (`routing_enabled: false`). Tests: 82 default passed; `-m clip` and `-m lmstudio` 1 passed each. Nothing is committed to git yet.
+**Snapshot:** phases 0–4 done, Phase 5 started, Phase 6 not started. Routing is disabled by default (`routing_enabled: false`). Tests: 87 default passed (as reported by main_agent after R3-5); `-m clip` and `-m lmstudio` last passed at 1 each. Reviewer blockers R3-1…R3-5 are fixed. **Git:** 11 commits on `master`, tags `v0.1-phase4-baseline` (208713e) and `v0.2-r3-blockers-fixed` (0435d99); the backup branch `backup/pre-author-rewrite` holds the pre-rewrite history.
 
 ---
 
@@ -38,7 +38,7 @@ This file merges what used to be three documents: the plan (`adaptive_object_det
 | D-5 | CLIP relevance bands on the `clip_prompt_softmax_v1` scale | none (`raw_scale: unspecified`) | Choose them from the calibration split (never the frozen set), or fit a calibrator (B-2, B-3). |
 | D-6 | GPU budget counts only adapter-measured device time, no wall-time proxy | measured only | Confirm. |
 | D-7 | VLM model: 4B in use, 8B not loaded | `qwen3-vl-4b-instruct` | Load 8B and compare on real crops (B-6). |
-| D-8 | Commit the work (reviewer H3: per-phase commits) | uncommitted | Say the word and I'll commit, phase by phase or as one commit. |
+| D-8 | Commit the work (reviewer H3: per-phase commits) | **Resolved 2026-11-09** | Baseline committed in 6 commits; one commit per R3 fix. Older commits had their author email rewritten from the NCS address to the gmail one (user chose this). Delete `backup/pre-author-rewrite` and `refs/original/*` once you are sure. |
 
 ## To do — ready now
 
@@ -53,7 +53,8 @@ This file merges what used to be three documents: the plan (`adaptive_object_det
 
 | ID | Card | Blocked by |
 |---|---|---|
-| B-1 | Shadow decisions on real images (not just the fixture) | T-1 |
+| B-1a | Real-image shadow run from saved predictions (`PrecomputedDetector`) | saved predictions from a real detector, plus labels |
+| B-1b | Live primary and real SAHI shadow | T-1 |
 | B-2 | Relevance calibrator (P(any target), modelling class correlation) and difficulty calibrator (against a defined primary-detector failure event). The `RelevanceCalibrator` protocol has no implementation. | T-2 |
 | B-3 | Threshold fitting under explicit constraints, with bootstrap/CI by source group; record calibrator versions and the data hash | T-2, B-2 |
 | B-4 | Record numeric promotion targets in config (recall, FN rate, cost, precision) **before** the frozen run | user, T-2 |
@@ -93,6 +94,13 @@ This file merges what used to be three documents: the plan (`adaptive_object_det
 | F-23 | `difficulty_uncalibrated` reason code; dead `sahi` extra removed; `clip` extra; GPU-time rule | — | D-log §5 |
 | F-24 | VLM-vs-human agreement scoring (one label set scores several VLMs) | 5 | D-log §6 |
 | F-25 | CLIP relevance scorer with scale guard and weights digest | 2/5 | D-log §7, `-m clip` |
+| F-26 | R3-1: export and report use only the current run's records | 4 | f2dd581 |
+| F-27 | R3-2: cross-class conflicts stay in review even on VLM `absent` | 4 | cd33250 |
+| F-28 | R3-3: VLM calls are **at-most-once** on resume; an interrupted request becomes `uncertain`/review and is not re-sent — **behavior change** | 4 | f530f98 |
+| F-29 | R3-4: incomplete calibrated relevance output never gates a low band | 2 | 5cbbc48 |
+| F-30 | R3-5: a bare human `complete` cannot clear open findings | 4 | 0435d99 |
+
+Qualifications still open on earlier rows (reviewer §7): F-12 is now covered by F-30. F-13 resume guarantee is now at-most-once for the VLM (F-28). F-14 export mixing is fixed (F-26). **F-15 is utility-level only:** `vad-route shadow` does not accept a split or lock, so production runs do not enforce isolation. Replayed CLIP scores in JSONL carry no scale check (D-5).
 
 ## Acceptance tests (spec table, with status)
 
