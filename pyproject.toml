@@ -36,8 +36,9 @@ markers = [
     "clip: requires open_clip + torch and local CLIP weights (VAD_CLIP_WEIGHTS or the HF cache)",
     "gdino: requires the local Grounding DINO server (src/services/grounding_dino)",
     "wemm: requires the WeMM embedding server at $VAD_WEMM_URL",
+    "e2e: requires all three live services at once (Grounding DINO, WeMM, LM Studio)",
 ]
-addopts = "-m 'not lmstudio and not clip and not gdino and not wemm'"
+addopts = "-m 'not lmstudio and not clip and not gdino and not wemm and not e2e'"
 
 # --------------------------------------------------------------------------- pixi
 # Environment manager for this repo (no venv/uv/conda). `pixi run test`, `pixi run -e clip test-clip`.
@@ -64,6 +65,7 @@ test = "pytest"
 test-lmstudio = "pytest -m lmstudio -rs"
 test-gdino = "pytest -m gdino -rs"
 test-wemm = "pytest -m wemm -rs"
+test-e2e = "pytest -m e2e -rs"
 export-schema = "vad-route export-schema --out schemas"
 
 [tool.pixi.feature.clip.tasks]

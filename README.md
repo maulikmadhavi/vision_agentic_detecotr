@@ -78,6 +78,8 @@ Shadow output: `routes.sqlite` (resumable step cache, records, error queue), `ro
 pixi run test                 # unit + acceptance (no network, no GPU)
 pixi run test-lmstudio        # live check against local LM Studio (-rs: lists skips)
 pixi run test-wemm            # live WeMM scorer, synthetic image (needs $VAD_WEMM_URL; skips without it)
+pixi run test-gdino           # live Grounding DINO server (start it first; see its README.md)
+pixi run test-e2e             # one shadow run with all three services + one outage case per service (synthetic images)
 pixi run -e clip test-clip    # live CLIP scorer: not used for now (kept)
 pixi run -e clip gpu-check    # torch version, CUDA available, device names (clip env)
 ```
@@ -98,7 +100,7 @@ $env:VAD_WEMM_URL = "<your WeMM MCP endpoint>"                       # PowerShel
 $env:VAD_CLIP_WEIGHTS = "C:\path\to\open_clip_model.safetensors"   # CLIP, not used for now
 ```
 
-**Recording live results.** `test-wemm` skips without `$VAD_WEMM_URL`, and `test-clip` **skips** (it does not fail) when no weights are found, so a zero exit code alone does not prove the scorer ran. Record the passed and skipped counts that pytest prints (the tasks pass `-rs`, so the skip reason is listed), plus the pixi environment. `test-lmstudio` fails if the server or model is unavailable.
+**Recording live results.** The live tasks **skip** (they do not fail) when their service is unreachable: `test-wemm` without `$VAD_WEMM_URL` or when the server cannot be reached, `test-gdino` when the server is not running, `test-lmstudio` when LM Studio is down or does not list the model, `test-e2e` when any of the three is unreachable, and `test-clip` when no weights are found. A zero exit code alone therefore does not prove a service ran. Record the passed and skipped counts that pytest prints (the tasks pass `-rs`, so the skip reason is listed), plus the pixi environment.
 
 ## Layout
 

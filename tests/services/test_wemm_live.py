@@ -5,20 +5,18 @@ The endpoint comes only from the environment:  VAD_WEMM_URL=<url> pixi run test-
 
 from __future__ import annotations
 
-import os
-
 import pytest
 from PIL import Image, ImageDraw
 
 from services.wemm_mcp import WeMMMCPRelevanceScorer
 
+from .live import require_wemm
+
 pytestmark = pytest.mark.wemm
 
 
 def test_wemm_scores_a_matching_prompt_above_an_unrelated_one():
-    url = os.environ.get("VAD_WEMM_URL")
-    if not url:
-        pytest.skip("VAD_WEMM_URL is not set")
+    url = require_wemm()
     img = Image.new("RGB", (640, 480), "white")
     ImageDraw.Draw(img).rectangle([200, 160, 439, 319], fill=(0, 0, 255))
     scores = WeMMMCPRelevanceScorer(url=url).score(
