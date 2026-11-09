@@ -148,9 +148,34 @@ class RoutingPipeline:
             self.store.put_step(key, step, cached)
         return _dets(cached["detections"]), cached["gpu_ms"], list(cached["warnings"])
 
+    def _run_sliced_detection(self, key: str, image: Image.Image, ref: ImageRef, elapsed_ms: Callable[[], float],
+                              gpu_before: float | None) -> dict:
+        """The ``sahi`` step payload, from the step cache or one sliced run (then cached). Errors propagate.
+
+        Tiling stops early when the image's elapsed budget is spent, or when the GPU time
+        measured before slicing plus the tiles' measured GPU time reaches the GPU budget.
+        """
+        cached = self.store.get_step(key, "sahi")
+        if cached is not None:
+            return cached
+        budgets = self.cfg.budgets
+
+        def stop_check(sahi_gpu: float | None) -> str | None:
+            if elapsed_ms() >= budgets.max_elapsed_ms:
+                return "elapsed_budget_exhausted"
+            if gpu_before is not None and sahi_gpu is not None and gpu_before + sahi_gpu >= budgets.max_gpu_ms:
+                return "gpu_budget_exhausted"
+            return None
+
+        r = run_sliced(self.sahi_detector, image, ref, self.cfg.task.class_ids, self.cfg.slicing,
+                       self.cfg.matching.class_mapping, max_slices=budgets.max_slices, stop_check=stop_check)
+        cached = {"detections": _dump(r.detections), "raw": _dump(r.raw), "gpu_ms": r.gpu_ms,
+                  "warnings": r.warnings, "slices_run": r.slices_run, "stopped_reason": r.stopped_reason}
+        self.store.put_step(key, "sahi", cached)
+        return cached
+
     def _route_image(self, image: Image.Image, ref: ImageRef, key: str) -> RouteRecord:
         cfg, t0 = self.cfg, self.clock()
-        class_ids = cfg.task.class_ids
         events: list[str] = []
         warnings: list[str] = []
         failures: list[str] = []
@@ -213,34 +238,17 @@ class RoutingPipeline:
                 failures.append(f"secondary_failed:{type(e).__name__}")
 
         if "sahi" in decision.actions and self.sahi_detector is not None and within_budget("sahi"):
-            det = self.sahi_detector
-
-            gpu_before = gpu_total
-
-            def stop_check(sahi_gpu: float | None) -> str | None:
-                if elapsed_ms() >= cfg.budgets.max_elapsed_ms:
-                    return "elapsed_budget_exhausted"
-                if gpu_before is not None and sahi_gpu is not None and gpu_before + sahi_gpu >= cfg.budgets.max_gpu_ms:
-                    return "gpu_budget_exhausted"
-                return None
-
             try:
-                cached = self.store.get_step(key, "sahi")
-                if cached is None:
-                    r = run_sliced(det, image, ref, class_ids, cfg.slicing, cfg.matching.class_mapping,
-                                   max_slices=cfg.budgets.max_slices, stop_check=stop_check)
-                    cached = {"detections": _dump(r.detections), "raw": _dump(r.raw), "gpu_ms": r.gpu_ms,
-                              "warnings": r.warnings, "slices_run": r.slices_run, "stopped_reason": r.stopped_reason}
-                    self.store.put_step(key, "sahi", cached)
-                sahi, sahi_raw = _dets(cached["detections"]), _dets(cached["raw"])
-                add_gpu(cached["gpu_ms"])
-                slices_used = cached["slices_run"]
-                warnings += cached["warnings"]
-                if cached["stopped_reason"]:
-                    failures.append(f"sahi_partial:{cached['stopped_reason']}")
+                sliced = self._run_sliced_detection(key, image, ref, elapsed_ms, gpu_total)
+                sahi, sahi_raw = _dets(sliced["detections"]), _dets(sliced["raw"])
+                add_gpu(sliced["gpu_ms"])
+                slices_used = sliced["slices_run"]
+                warnings += sliced["warnings"]
+                if sliced["stopped_reason"]:  # budget hit mid-way: a partial pass is never claimed complete
+                    failures.append(f"sahi_partial:{sliced['stopped_reason']}")
                 ran_sahi = True
                 events.append(f"sahi:{len(sahi)}/{slices_used}_slices")
-            except Exception as e:
+            except Exception as e:  # optional slicing failing is a review reason, not an error
                 failures.append(f"sahi_failed:{type(e).__name__}")
 
         self._step = "fusion"
