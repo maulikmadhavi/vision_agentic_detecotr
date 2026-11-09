@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import time
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 
 from PIL import Image
@@ -23,7 +23,7 @@ from .matching import disagreement, final_candidate, fuse, match
 from .policy import Capabilities, route
 from .schemas import (
     Budget, Detection, Disagreement, ErrorRecord, FinalCandidate, ImageRef, RouteDecision, RouteRecord,
-    RunInfo, StageA, StageB, Trace, VerificationRequest, VerificationResult, stable_id,
+    RunInfo, Source, StageA, StageB, Trace, VerificationRequest, VerificationResult, stable_id,
 )
 from .scoring import box_features, class_is_high_relevance, estimate_difficulty, stage_a
 from .slicing import run_sliced
@@ -126,11 +126,25 @@ class RoutingPipeline:
             self.store.put_error(err)
             return err
 
-    def _cached_detect(self, key: str, step: str, fn) -> tuple[list[Detection], float | None, list[str]]:
+    def _load_or_compute_stage_a(self, image: Image.Image, ref: ImageRef, key: str) -> StageA:
+        cached = self.store.get_step(key, "stage_a")
+        if cached is not None:
+            return StageA.model_validate(cached)
+        sa = stage_a(image, ref, self.cfg, self.relevance, self.calibrator)
+        self.store.put_step(key, "stage_a", sa.model_dump(mode="json"))
+        return sa
+
+    def _run_cached_detector(
+        self, key: str, step: str, detector: Detector, image: Image.Image, ref: ImageRef, source: Source,
+        class_mapping: Mapping[str, str] | None = None,
+    ) -> tuple[list[Detection], float | None, list[str]]:
+        """Detections for ``step``, from the step cache or one detector call (then cached). Errors propagate."""
         cached = self.store.get_step(key, step)
         if cached is None:
-            dets, gpu, warns = fn()
-            cached = {"detections": _dump(dets), "gpu_ms": gpu, "warnings": warns}
+            class_ids = self.cfg.task.class_ids
+            res = detector.detect(image, ref.id, class_ids)
+            dets, warns = to_detections(res.detections, ref, class_ids, source, detector.model_version, class_mapping)
+            cached = {"detections": _dump(dets), "gpu_ms": res.gpu_ms, "warnings": warns}
             self.store.put_step(key, step, cached)
         return _dets(cached["detections"]), cached["gpu_ms"], list(cached["warnings"])
 
@@ -160,20 +174,11 @@ class RoutingPipeline:
             return True
 
         self._step = "stage_a"
-        cached_sa = self.store.get_step(key, "stage_a")
-        if cached_sa is None:
-            sa = stage_a(image, ref, cfg, self.relevance, self.calibrator)
-            self.store.put_step(key, "stage_a", sa.model_dump(mode="json"))
-        else:
-            sa = StageA.model_validate(cached_sa)
-
-        def run_primary():
-            res = self.primary.detect(image, ref.id, class_ids)
-            dets, w = to_detections(res.detections, ref, class_ids, "primary", self.primary.model_version)
-            return dets, res.gpu_ms, w
+        sa = self._load_or_compute_stage_a(image, ref, key)
 
         self._step = "primary"
-        primary, g, w = self._cached_detect(key, "primary", run_primary)
+        # A primary failure propagates: process() queues the image as an ErrorRecord.
+        primary, g, w = self._run_cached_detector(key, "primary", self.primary, image, ref, "primary")
         add_gpu(g)
         warnings += w
         events.append(f"primary:{len(primary)}")
@@ -197,21 +202,14 @@ class RoutingPipeline:
         sahi_raw: list[Detection] = []
         ran_secondary = ran_sahi = False
         if "secondary" in decision.actions and self.secondary is not None and within_budget("secondary"):
-            sec = self.secondary
-
-            def run_secondary():
-                res = sec.detect(image, ref.id, class_ids)
-                dets, w2 = to_detections(res.detections, ref, class_ids, "secondary", sec.model_version,
-                                         cfg.matching.class_mapping)
-                return dets, res.gpu_ms, w2
-
             try:
-                secondary, g, w = self._cached_detect(key, "secondary", run_secondary)
+                secondary, g, w = self._run_cached_detector(key, "secondary", self.secondary, image, ref, "secondary",
+                                                            cfg.matching.class_mapping)
                 add_gpu(g)
                 warnings += w
                 ran_secondary = True
                 events.append(f"secondary:{len(secondary)}")
-            except Exception as e:
+            except Exception as e:  # an optional detector failing is a review reason, not an error
                 failures.append(f"secondary_failed:{type(e).__name__}")
 
         if "sahi" in decision.actions and self.sahi_detector is not None and within_budget("sahi"):
