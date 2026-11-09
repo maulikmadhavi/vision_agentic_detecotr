@@ -1,26 +1,88 @@
 # Reviewer suggestions — adaptive object detection routing
 
-## Current code review — 2026-11-10
+## Current code review — 2026-11-10, follow-up
 
-**Scope:** reviewed the three flat integrations, CLI/pipeline/WeMM refactors, behavior-pin tests and the uncommitted explicit-VLM-configuration/identity changes on top of `77d87dd`. **Verification:** default CPU/mock suite with local socket access: **223 passed, 7 live tests deselected, 1 Starlette deprecation warning**. Two additional local-fixture/mock reproductions below expose cases not covered by the suite. No live service or collected image was used. Only this review document was edited; existing implementation changes were preserved.
+**Assessment:** substantial progress on evaluation, sample preparation and human review. The previous two P1 findings are fixed. The new data-handling paths still have reproducible integrity defects; fix these before relying on fitted artifacts or frozen benchmark results. This section supersedes older status claims below.
+
+**Scope and verification:** inspected current source and tests, including calibration code arriving during the review. The initial missing-module collection error was transient: `routing.calibration` and its CLI command subsequently appeared. Full CPU/mock suite results are recorded below; additional reproductions used synthetic labels/images and temporary files only. No live service or collected image was used. Only this review file was edited; no implementation changes or commits were made.
 
 ### Findings requiring action
 
-| Priority / location | Reproduced behavior and consequence | Implementation instruction / required regression |
-|---|---|---|
-| **P1 — slicing identity omitted from cache key.** `src/routing/pipeline.py:54–81`, `record_key`; `src/routing/schemas.py:RunInfo` | `sahi_detector` is independently injectable, but `RunInfo` records only primary/secondary detector identities and artifacts. Reproduction: process a tiny-object fixture with slicing detector `crop-A`; reopen the same store with `crop-B`, leaving primary/config/relevance unchanged. The record ID is unchanged, `crop-B` receives **zero calls**, and returned raw slices still name `crop-A`. This is an existing identity gap, not evidence that the helper extraction itself introduced it. | Record the **effective** crop detector's model version and artifact digest, including the distinction between no slicing capability, primary-as-slicer and a dedicated slicer. Bind them into run identity before any lookup. Define the schema/cache migration explicitly and preserve loading of old records. Add final-record and interrupted-step resume regressions: changing slicer version or digest must not reuse old slices; unchanged effective identity must still reuse them. |
-| **P1 — URL credentials leak despite sanitized model identity.** `src/service_detector_vlm/openai_service_call.py:47`, `:64`, `:106` | The new test permits `https://user:password@host/v1` and checks only `model_version`. With a mocked HTTP 401, a synthetic password appeared in both the verifier's dataclass `repr` and `VerificationResult.model_note`. `uncertain()` truncates but does not sanitize the exception; this note can be persisted/exported in the route trace. The bearer-token environment path is separate and its header field is already excluded from repr. | Prefer rejecting URL userinfo at construction and instruct callers to use `api_key_env`; validate before constructing errors/repr containing the supplied URL. If URL credentials must remain supported, redact them in repr and every persisted diagnostic. Add regression cases for 401/500, timeout and connection errors asserting that synthetic credentials never occur in repr, serialized results or route traces. Sanitizing only `model_version` is insufficient. |
+#### R5-1 · P1 — merging reviews can silently change a chosen box's class
 
-**Additional identity limit:** the generic VLM now separates endpoints by host/explicit port/path, but it does not verify model revision and omits the scheme from its identity. The CLI's config hash includes `vlm.base_url`, so a scheme-only config change already changes CLI run keys; do not report that as a proven CLI collision. Direct adapter injection should use a stable deployment/revision identity or a validated canonical endpoint. A mutable model alias at the same endpoint remains unverified provenance, just as the embedding server does without a build.
+**Location:** `src/routing/sample.py:397–419`, `merge_reviews`.
 
-### Completed changes and remaining work
+**Evidence / implication:** each input label file correctly resolves its own category IDs, but the merged file copies the second pass's numeric `category_id` under the **first** pass's category table. Reproduced with reversed IDs: the adjudicator chose a `zz-custom.class_7` box; the merged result loaded it as `blue_widget_x9`. Independent labelling exports need not share numeric IDs. Alternative opinions have the same ambiguity.
 
-- **Completed:** requested flat packages; removal of OpenCLIP code/environment; replay under `routing`; GDINO-local runtime/contracts; generic OpenAI-compatible verifier and optional env-based authorization; HTTPS probe fix and required-services test mode; CLI dispatch/provider/output helpers; Stage A, detector, slicing and VLM-request helpers; clearer names and annotations. Behavior pins now exercise several previously uncovered resume/failure/budget paths. Existing recovery and coordinate tests passed in this review.
-- **Working-tree migration:** VLM endpoint/model defaults are removed and enabled CLI runs reject missing values. `model_version` now uses `openai-compatible:<model>@<endpoint>`; golden expectations deliberately changed. Removing defaults also changes config hashes for callers that omitted those fields, even with VLM disabled. Keep the migration note; old SQLite results remain readable but are not automatically reused under new keys. Do not present this as a pure rename with unchanged identity.
-- **Documentation follow-up:** the board still reports 218 tests and D-11's older `lmstudio:{model}` default; T-13/T-14 still read as pending despite the implemented cleanup/pins. Mark completed portions and retain unresolved choices explicitly. The older research/cleanup sections below are historical snapshots where they describe unflattened packages or future helper extraction. The pipeline opening still overstates detector at-most-once behavior; a crash before detector persistence can repeat inference.
-- **Release gaps remain:** human labels/permissions, enforced split-aware runs, fitted relevance/difficulty calibration, detection metrics, per-finding reviewer ingestion and frozen ablations. Neither this refactor nor its passing mock suite provides target-domain accuracy evidence. Follow A2–A8 below after fixing identity/error handling; avoid another broad structural rewrite.
+**Fix / regression:** normalize selected and alternative annotations through source category ID → task class name → output category ID. Validate matching image dimensions before merging and validate the completed document. Add tests for swapped and disjoint numeric category IDs; choosing the second opinion must preserve its semantic class and geometry.
 
-**Recommended next milestone:** fix the two reproduced findings with focused regressions, rerun CPU/mock checks including local FastAPI tests, refresh current board/migration notes, then stabilize the implementation snapshot. No need to repeat live inference merely to verify these two fixes; their reproductions require only local fixtures and fake HTTP.
+#### R5-2 · P1 — frozen evaluation does not bind predictions to frozen image content
+
+**Location:** `src/routing/sample.py:256–281`, `make_split`; `src/routing/evaluation.py:95–119`; `src/routing/cli.py:179–206`, `_run_evaluate`.
+
+**Evidence / implication:** grouping computes image SHA-256 values, but the split retains only a digest of the groups document; evaluation never compares a route's `image.sha256` with the original image. Replaced a white fixture with a red image of identical dimensions and the same explicit image ID: evaluation exited **0**, reported **`verified frozen_eval`**, and counted the replacement as a result. Locking labels and IDs alone cannot establish that competing runs used the same images.
+
+**Fix / regression:** carry per-image content hashes into the split and bind the frozen subset's hashes/group membership into a versioned lock. Verify route hash, dimensions and task identity before scoring; apply the same content checks to fitting inputs. A changed image with the same ID must fail, while identical bytes at another path should pass. Treat old locks without content hashes as explicitly unverified rather than silently upgrading them.
+
+#### R5-3 · P1 — contradictory human decisions can produce `complete`
+
+**Location:** `src/routing/review.py:103–136`, `_review_one`; `src/routing/completeness.py:50–79`.
+
+**Evidence / implication:** the conflict check covers `class_absent` versus `add_box`, but not accepted or reclassified model candidates. Reproduced `accept(A candidate)` + `class_absent(A)` + resolution of the other class + `complete`: the output was **complete and still exported class A**. The human record asserts both presence and absence, so completeness is not trustworthy.
+
+**Fix / regression:** after applying effective candidate decisions, reject conflicts between `class_absent` and any accepted candidate of that class, including preaccepted and reclassified candidates. Keep the conflict unresolved with actionable IDs; never silently delete a box. Cover accept/absence, reclassify/absence and a valid reject/absence resolution.
+
+#### R5-4 · P2 — duplicate COCO IDs silently remove or mislabel images
+
+**Location:** `src/routing/metrics.py:74–108`, `load_ground_truth`.
+
+**Evidence / implication:** `vad_image_id` uniqueness is checked, but numeric COCO image IDs are used as dictionary keys without a uniqueness check. Two distinct images with the same numeric ID loaded as **one image**, and the first image's annotation moved to the second. This changes evaluation denominators, labels and downstream split/calibration inputs without an error.
+
+**Fix / regression:** validate unique image/category/annotation IDs before constructing lookup maps, and an unambiguous category-name mapping. Raise `LabelError` naming the duplicate. Add the two-image collision fixture and ensure no image or annotation can be silently reassigned. Distinct numeric IDs with valid references must continue to load.
+
+#### R5-5 · P2 — repeated trace rows bypass calibration's sample minimum
+
+**Location:** `src/routing/calibration.py:87–102`, `fit_relevance_rows`; `:117–146`, `fit_relevance`.
+
+**Evidence / implication:** repeating one positive and one negative record ten times each fits successfully and reports **10 positives / 10 negatives from only two unique images**. Concatenated or retried traces therefore change sample weighting and bypass the advertised minimum. `metrics.image_results` also silently chooses the last row for a repeated image ID, while cost reporting counts every row.
+
+**Fix / regression:** require one selected observation per image per fit/evaluation arm. Either reject duplicates, or explicitly deduplicate byte-identical records and reject conflicting records for the same image. Count unique images after that check and retain source groups for later uncertainty analysis. Repeated two-image input must fail the minimum; mixed runs must not be resolved by file order.
+
+#### R5-6 · P2 — calibration artifacts can claim a score scale the trace never used
+
+**Location:** `src/routing/calibration.py:120–129`, `fit_relevance`.
+
+**Evidence / implication:** fitting checks task and scorer name, but takes `scale` from the supplied config without matching the trace's run config. A trace generated with `test_scale_v1` fitted successfully when only the supplied scale was changed to `unrelated_scale_v2`. The artifact then advertised the new scale. A future loader checking that field would trust incorrect provenance.
+
+**Fix / regression:** validate the originating run configuration, accounting explicitly for shadow/CLI overrides, or persist and verify scoring provenance directly in the run. Bind scale, scorer/build, prompts and preprocessing to the observations. Reject changed-scale and incompatible mixed-run inputs; preserve valid fits from the original shadow config.
+
+#### R5-7 · P2 — frozen accuracy and cost reports use different image populations
+
+**Location:** `src/routing/cli.py:200–206`, `_run_evaluate`.
+
+**Evidence / implication:** ground truth is filtered to frozen IDs, but `route_report(records)` receives the entire trace. A trace containing one frozen and one development result reported **one frozen result but two cost images**. Development latency, review decisions and VLM calls can therefore alter a frozen accuracy/cost comparison.
+
+**Fix / regression:** select and validate the evaluation cohort once; use it for detection, annotation and cost metrics. Report out-of-cohort results separately, and retain labelled images without results as operational failures. Adding a slow development record must leave every frozen metric unchanged.
+
+### What is done, and what remains
+
+| Area | Current assessment / next action |
+|---|---|
+| Previous review fixes | **Verified in source and passing regressions:** dedicated slicer model/digest included in run identity, legacy records still load; VLM URL userinfo rejected without echoing credentials; pipeline docstring now states detector replay and VLM recovery accurately. |
+| Service architecture | Three flat integration packages and generic OpenAI-compatible verification remain in place. No further package restructuring is needed for these fixes. Mutable VLM aliases and WeMM without a verified build remain provenance limits. |
+| A2 / A3 / A7 tooling | Metrics CLI, grouping/exclusions/splits, optional split-aware exports, second-review merge and persisted adjudication/re-audit now exist. They are **implemented with corrections required above**, not missing wholesale. The mock suite does not establish target-domain accuracy. |
+| A5 calibration | Logistic fitting, coherent any-target probabilities, count guards, artifact output and `fit-relevance` now exist. Runtime artifact loading/compatibility validation, CLI routing integration and held-out Brier/ECE/reliability reports remain to be completed; address R5-5/R5-6 first. |
+| Real-data and rollout work | Human labels/permissions, enforced transfer policy (D-12), mandatory split provenance for training exports (D-14), difficulty validation, VLM human-label study, frozen ablations/numeric gates and trainer integration remain open. Do not run collected images against services as part of these fixes. |
+
+**Documentation corrections for the implementation agent:** reconcile the board's Phase 4/5 rows, T-7/T-8/T-9/T-11 and checklist with F-49–F-52; replace old `services.*` paths and “CLIP code kept” claims. Update specification statements that reviewer ingestion and detection metrics are absent. The board's promise of `NOT A FINDING` without a verified split is not enforced by `evidence_status(label_doc)`, which checks human provenance only: make evidence eligibility depend on both, while retaining descriptive metrics for unverified runs. Keep one current status table; the research work orders below remain useful acceptance criteria but their presence/missing table is historical.
+
+**Suggested implementation order:** R5-1/R5-4 label integrity → R5-3 adjudication consistency → R5-2 frozen content binding → R5-5/R5-6 fitting provenance → R5-7 cohort reporting. Use small validation helpers at input boundaries and focused regression tests; no new service, framework or broad refactor is necessary. Record verified fixes here and refresh board status after the full CPU/mock suite passes.
+
+**Validation:** `.\.pixi\envs\default\python.exe -B -m pytest -q -p no:cacheprovider` → **436 passed, 7 live tests deselected, 1 Starlette deprecation warning**, in 19.02 seconds. FastAPI mock tests ran with local socket access. All seven findings above were reproduced locally outside the existing suite; a green suite currently does not cover these cases.
+
+## Historical research and cleanup notes
+
+The sections below preserve earlier reasoning and work orders. Use the current review above for implementation status; dated claims that metrics, split enforcement, review ingestion or fitting do not exist are superseded.
 
 ## Research evidence and agent action plan — 2026-11-09
 
