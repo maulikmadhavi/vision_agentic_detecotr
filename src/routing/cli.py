@@ -18,14 +18,14 @@ from service_detector_gdino.client import RemoteDetector
 from service_detector_vlm.openai_service_call import OpenAICompatibleVerifier
 from services_embedding.client import WEMM_TEXT_SCALE, WeMMMCPRelevanceScorer
 
-from .evaluation import lock_frozen_set, route_report
+from .evaluation import IsolationError, load_frozen, lock_frozen_set, route_report
 from .export import export_legacy, export_routed
-from .image_inputs import ManifestEntry, load_image, load_manifest
+from .image_inputs import ManifestEntry, image_id, load_image, load_manifest
 from .interfaces import Detector, RelevanceScorer
 from .metrics import LabelError, evaluate, evidence_status, image_results, load_ground_truth
 from .pipeline import RoutingPipeline
 from .replay import PrecomputedDetector, PrecomputedRelevance
-from .sample import SampleError, group_manifest, make_split
+from .sample import SampleError, frozen_label_subset, group_manifest, make_split
 from .store import RouteStore, StoreLockedError, job_lock
 from .schemas import ErrorRecord, RouteRecord, TaskSpec, export_json_schemas
 from .task_config import RoutingConfig, load_config
@@ -42,6 +42,8 @@ def _parser() -> argparse.ArgumentParser:
     e.add_argument("--trace", required=True, help="route_trace.jsonl of the shadow run")
     e.add_argument("--out", required=True, help="metrics JSON to write")
     e.add_argument("--iou", type=float, default=0.5, help="working IoU threshold for recall, false positives, misses")
+    e.add_argument("--split-manifest", help="with --frozen-lock: score only the frozen_eval images, after verifying")
+    e.add_argument("--frozen-lock", help="the frozen lock written by `vad-route sample split`")
     sample = sub.add_parser("sample", help="tooling for the human-checked trial sample")
     sample_sub = sample.add_subparsers(dest="sample_cmd", required=True)
     g = sample_sub.add_parser("group", help="group exact and near-duplicate images; list pairs for confirmation")
@@ -86,6 +88,7 @@ def _parser() -> argparse.ArgumentParser:
             p.add_argument("--wemm-max-side", type=int, default=448, help="downscale longest image side before sending")
             p.add_argument("--relevance-version", default="precomputed", help="scorer identifier only (not verified); the file's SHA-256 is bound into the run key separately")
             p.add_argument("--vlm", action="store_true", help="enable VLM verification at vlm.base_url (overrides config)")
+            p.add_argument("--split-manifest", help="split manifest; tags each exported image with vad_split")
     return ap
 
 
@@ -142,9 +145,25 @@ def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         ground_truth = load_ground_truth(label_doc, task)
     except LabelError as e:
         parser.error(f"--labels: {e}")
+    if bool(args.split_manifest) != bool(args.frozen_lock):
+        parser.error("--split-manifest and --frozen-lock go together")
+    split = {"status": "unverified: no --split-manifest/--frozen-lock; every labelled image is scored, "
+                       "whatever its split"}
+    if args.split_manifest:
+        manifest = json.loads(Path(args.split_manifest).read_text(encoding="utf-8"))
+        lock = json.loads(Path(args.frozen_lock).read_text(encoding="utf-8"))
+        frozen_ids = sorted(i for i, img in manifest["images"].items() if img["split"] == "frozen_eval")
+        if manifest.get("frozen_lock_sha256") != lock.get("lock_sha256") or lock.get("image_ids") != frozen_ids:
+            parser.error("--frozen-lock does not belong to --split-manifest (lock hash or frozen images differ)")
+        try:
+            load_frozen(args.frozen_lock, frozen_label_subset(label_doc, frozen_ids))
+        except IsolationError as e:
+            parser.error(f"the frozen labels do not verify against --frozen-lock: {e}")
+        ground_truth = {i: ground_truth[i] for i in frozen_ids}
+        split = {"status": "verified frozen_eval", "frozen_images": len(frozen_ids), "lock_sha256": lock["lock_sha256"]}
     lines = Path(args.trace).read_text(encoding="utf-8").splitlines()
     records = [RouteRecord.model_validate_json(line) for line in lines if line.strip()]
-    metrics = {"evidence_status": evidence_status(label_doc),
+    metrics = {"evidence_status": evidence_status(label_doc), "split": split,
                **evaluate(ground_truth, task.class_ids, image_results(records), args.iou),
                "cost": route_report(records)}
     out = Path(args.out)
@@ -227,6 +246,20 @@ def _run_shadow(parser: argparse.ArgumentParser, args: argparse.Namespace, cfg: 
     if args.vlm:
         overrides["vlm"] = cfg.vlm.model_copy(update={"enabled": True})
     cfg = cfg.model_copy(update=overrides)
+    splits = None
+    if args.split_manifest:
+        manifest = json.loads(Path(args.split_manifest).read_text(encoding="utf-8"))
+        if manifest.get("version") != "split-v1":
+            parser.error("--split-manifest must be a split-v1 file from `vad-route sample split`")
+        splits = {i: img["split"] for i, img in manifest["images"].items()}
+        ids = []
+        for entry in entries:
+            try:
+                ids.append(image_id(entry, b"" if entry.image_id else Path(entry.uri).read_bytes()))
+            except OSError:
+                ids.append(entry.uri)  # unreadable and unnamed: cannot be matched to the split
+        if missing := sorted(i for i in ids if i not in splits):
+            parser.error(f"images not in --split-manifest: {missing[:5]}")
     secondary = (PrecomputedDetector(args.secondary_predictions, args.secondary_version)
                  if args.secondary_predictions else None)
     relevance = _build_relevance_scorer(parser, args, cfg)
@@ -244,7 +277,7 @@ def _run_shadow(parser: argparse.ArgumentParser, args: argparse.Namespace, cfg: 
         with job_lock(out):
             store = RouteStore(out / "routes.sqlite")
             pipe = RoutingPipeline(cfg, primary, store, secondary=secondary, relevance=relevance, vlm=vlm)
-            report = _write_shadow_outputs(pipe.run(entries), cfg.task, out)
+            report = _write_shadow_outputs(pipe.run(entries), cfg.task, out, splits)
     except StoreLockedError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -255,7 +288,8 @@ def _run_shadow(parser: argparse.ArgumentParser, args: argparse.Namespace, cfg: 
     return 0
 
 
-def _write_shadow_outputs(results: list[RouteRecord | ErrorRecord], task: TaskSpec, out: Path) -> dict:
+def _write_shadow_outputs(results: list[RouteRecord | ErrorRecord], task: TaskSpec, out: Path,
+                          splits: dict[str, str] | None = None) -> dict:
     """Write annotations, trace and report for THIS run's results only.
 
     A reused --out store may hold records from earlier runs (other manifests, tasks or
@@ -264,7 +298,7 @@ def _write_shadow_outputs(results: list[RouteRecord | ErrorRecord], task: TaskSp
     records = sorted((result for result in results if isinstance(result, RouteRecord)),
                      key=lambda record: record.image.id)
     errors = [result for result in results if isinstance(result, ErrorRecord)]
-    export_routed(records, task, out / "annotations.json")
+    export_routed(records, task, out / "annotations.json", splits)
     with open(out / "route_trace.jsonl", "w", encoding="utf-8") as trace_file:
         for record in records:
             trace_file.write(record.model_dump_json() + "\n")

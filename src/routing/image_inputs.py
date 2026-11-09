@@ -32,6 +32,11 @@ def load_manifest(path: str | Path) -> list[ManifestEntry]:
                           r.get("image_id"), r.get("group_id")) for r in rows]
 
 
+def image_id(entry: ManifestEntry, data: bytes) -> str:
+    """The image id the pipeline records: the manifest's id, else a content-hash id."""
+    return entry.image_id or f"sha256-{hashlib.sha256(data).hexdigest()[:16]}"
+
+
 def load_image(entry: ManifestEntry) -> tuple[Image.Image, ImageRef]:
     data = Path(entry.uri).read_bytes()
     with Image.open(io.BytesIO(data)) as probe:
@@ -40,6 +45,6 @@ def load_image(entry: ManifestEntry) -> tuple[Image.Image, ImageRef]:
     img.load()
     img = img.convert("RGB")
     sha = hashlib.sha256(data).hexdigest()
-    ref = ImageRef(id=entry.image_id or f"sha256-{sha[:16]}", uri=entry.uri, width=img.width,
+    ref = ImageRef(id=image_id(entry, data), uri=entry.uri, width=img.width,
                    height=img.height, sha256=sha, group_id=entry.group_id)
     return img, ref

@@ -8,7 +8,7 @@ candidates become annotations; everything else stays in the route trace.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from .schemas import Detection, RouteRecord, TaskSpec, stable_id
@@ -24,13 +24,18 @@ def _ann(i: int, image_idx: int, cat: int, box, extra: dict) -> dict:
             "area": (x2 - x1) * (y2 - y1), "iscrowd": 0, **extra}
 
 
-def export_routed(records: Sequence[RouteRecord], task: TaskSpec, out: str | Path) -> dict:
+def export_routed(records: Sequence[RouteRecord], task: TaskSpec, out: str | Path,
+                  splits: Mapping[str, str] | None = None) -> dict:
+    """COCO-style export of accepted boxes; with ``splits`` each image carries ``vad_split`` so a
+    training or fitting reader can refuse frozen_eval images."""
     cat = {c["name"]: c["id"] for c in _categories(task)}
     images, anns = [], []
     for idx, r in enumerate(sorted(records, key=lambda r: r.image.id), start=1):
         images.append({"id": idx, "file_name": r.image.uri, "width": r.image.width, "height": r.image.height,
                        "vad_image_id": r.image.id, "vad_record_id": r.record_id,
                        "vad_completeness": r.completeness.status})
+        if splits is not None:
+            images[-1]["vad_split"] = splits[r.image.id]
         for c in r.final_candidates:
             if c.status == "accepted":
                 anns.append(_ann(len(anns) + 1, idx, cat[c.class_id], c.box_xyxy,
