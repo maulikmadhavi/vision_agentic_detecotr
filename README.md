@@ -73,10 +73,11 @@ Shadow output: `routes.sqlite` (resumable step cache, records, error queue), `ro
 
 ```bash
 pixi run test                 # unit + acceptance (no network, no GPU)
-pixi run test-lmstudio        # live check against local LM Studio (-rs: lists skips)
+pixi run test-vlm             # live VLM endpoint (VAD_VLM_URL / VAD_VLM_MODEL; default local LM Studio)
 pixi run test-wemm            # live WeMM scorer, synthetic image (needs $VAD_WEMM_URL; skips without it)
 pixi run test-gdino           # live Grounding DINO server (start it first; see its README.md)
 pixi run test-e2e             # one shadow run with all three services + one outage case per service (synthetic images)
+pixi run test-live-required   # release check: all live tests; an unreachable service FAILS instead of skipping
 ```
 
 ## Live prerequisites (not in the lockfile)
@@ -86,14 +87,14 @@ The live tests and `--wemm` / `--vlm` need assets that pixi does not install:
 | Asset | Expected | How it is found |
 |---|---|---|
 | WeMM embedding server | MCP streamable-http server reporting `meta.backend=wemm`, `meta.model=tencent/WeMM-Embedding-4B`, `meta.dim=2560` | `$VAD_WEMM_URL` (set it in your shell or an untracked, gitignored file; never commit the address) |
-| LM Studio | OpenAI-compatible server at `http://localhost:1234/v1` with model ID `qwen3-vl-4b-instruct` loaded | `vlm.base_url` / `vlm.model` in the config |
-| GPU | CUDA-capable NVIDIA GPU for the Grounding DINO server (CUDA 12.8 torch in its own pixi workspace) | see `src/service_detector_gdino/README.md` |
+| VLM endpoint | OpenAI-compatible Chat Completions server that accepts image data URIs and `json_schema` output; locally LM Studio at `http://localhost:1234/v1` with `qwen3-vl-4b-instruct` | runs: `vlm.base_url` / `vlm.model` (/ `vlm.api_key_env`) in the config; live tests: `VAD_VLM_URL` / `VAD_VLM_MODEL` (/ `VAD_VLM_API_KEY_ENV`), defaulting to the local example |
+| Grounding DINO server | svc-1.0 server on a CUDA-capable NVIDIA GPU (CUDA 12.8 torch in its own pixi workspace) | runs: `--primary-url` and the `--primary-*` identity flags; live tests: `VAD_GDINO_URL` / `VAD_GDINO_MODEL_ID` / `VAD_GDINO_REVISION` / `VAD_GDINO_WEIGHTS_SHA256`, defaulting to the pinned local server (see `src/service_detector_gdino/README.md`) |
 
 ```powershell
 $env:VAD_WEMM_URL = "<your WeMM MCP endpoint>"                       # PowerShell
 ```
 
-**Recording live results.** The live tasks **skip** (they do not fail) when their service is unreachable: `test-wemm` without `$VAD_WEMM_URL` or when the server cannot be reached, `test-gdino` when the server is not running, `test-lmstudio` when LM Studio is down or does not list the model, and `test-e2e` when any of the three is unreachable. A zero exit code alone therefore does not prove a service ran. Record the passed and skipped counts that pytest prints (the tasks pass `-rs`, so the skip reason is listed), plus the pixi environment.
+**Recording live results.** A live test **skips** when its service is unreachable (`test-wemm` also when `$VAD_WEMM_URL` is unset; `test-e2e` when any of the three is unreachable), so a zero exit code alone does not prove a service ran. A service that is reachable must answer one real synthetic inference first; if that fails, the test **fails** rather than skips. For a release check use `pixi run test-live-required` (or set `VAD_LIVE_REQUIRED=1`), where an unreachable service also fails. Record the passed and skipped counts that pytest prints (the tasks pass `-rs`, so the skip reason is listed), plus the configured endpoints and models.
 
 ## Layout
 

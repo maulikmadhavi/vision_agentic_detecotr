@@ -1,7 +1,8 @@
 """Live shadow run with all three services at once (excluded by default; synthetic images only).
 
-Needs the Grounding DINO server (pixi run -m src/service_detector_gdino/pixi.toml serve), LM Studio
-with qwen3-vl-4b-instruct, and the WeMM server at $VAD_WEMM_URL. Skips if any one is unreachable.
+Needs the Grounding DINO server (pixi run -m src/service_detector_gdino/pixi.toml serve), the VLM
+endpoint (VAD_VLM_URL / VAD_VLM_MODEL) and the WeMM server at $VAD_WEMM_URL; see live.py for the
+configuration. Skips if any one is unreachable (fails instead with VAD_LIVE_REQUIRED=1).
 Run:  VAD_WEMM_URL=<url> pixi run test-e2e
 """
 
@@ -18,13 +19,12 @@ from PIL import Image, ImageDraw
 from routing import cli
 from routing.schemas import VerificationResult
 
-from .live import require_gdino, require_lmstudio, require_wemm
+from . import live
+from .live import require_gdino, require_vlm, require_wemm
 
 pytestmark = pytest.mark.e2e
 
 REPO = Path(__file__).resolve().parents[2]
-REVISION = "a2bb814dd30d+bt0.35+tt0.25"
-WEIGHTS = "1a2412ef99bd74bcd3c2a246fa1e48581f8889a1300c9051974741314fc042f3"
 BLUE, RED = (0, 0, 255), (255, 0, 0)
 IMAGES = {  # name -> (size, [(shape, box, color)])
     "square": ((640, 480), [("rect", (200, 160, 359, 299), BLUE)]),
@@ -37,7 +37,7 @@ IMAGES = {  # name -> (size, [(shape, box, color)])
 
 @pytest.fixture(autouse=True)
 def services():
-    return {"gdino": require_gdino(), "wemm": require_wemm(), "vlm": require_lmstudio()}
+    return {"gdino": require_gdino(), "wemm": require_wemm(), "vlm": require_vlm()}
 
 
 def _closed_port_url(path: str = "") -> str:
@@ -64,8 +64,7 @@ def _inputs(root: Path, names, vlm_base_url: str | None = None) -> tuple[Path, P
         {"class_id": "blue_square", "display_name": "Blue square", "positive_prompts": ["a blue square"]},
         {"class_id": "red_circle", "display_name": "Red circle", "positive_prompts": ["a red circle"]}]}
     cfg["relevance"].update(raw_scale="wemm_text_cosine_v1", raw_high=0.3, raw_low=0.1)  # test-only bands
-    if vlm_base_url:
-        cfg["vlm"]["base_url"] = vlm_base_url
+    cfg["vlm"].update(base_url=vlm_base_url or live.VLM_URL, model=live.VLM_MODEL, api_key_env=live.VLM_API_KEY_ENV)
     config = root / "config.yaml"
     config.write_text(yaml.safe_dump(cfg), encoding="utf-8")
     return manifest, config
@@ -74,8 +73,8 @@ def _inputs(root: Path, names, vlm_base_url: str | None = None) -> tuple[Path, P
 def _shadow(root: Path, manifest: Path, config: Path, primary_url: str) -> tuple[int, dict, list[dict], dict]:
     out = root / "out"
     rc = cli.main(["shadow", "--config", str(config), "--images", str(manifest), "--primary-url", primary_url,
-                   "--primary-model-id", "grounding-dino-tiny", "--primary-revision", REVISION,
-                   "--primary-weights-sha256", WEIGHTS, "--primary-timeout", "120", "--wemm", "--vlm",
+                   "--primary-model-id", live.GDINO_MODEL_ID, "--primary-revision", live.GDINO_REVISION,
+                   "--primary-weights-sha256", live.GDINO_WEIGHTS, "--primary-timeout", "120", "--wemm", "--vlm",
                    "--out", str(out)])
     report = json.loads((out / "report.json").read_text(encoding="utf-8"))
     records = [json.loads(ln) for ln in (out / "route_trace.jsonl").read_text(encoding="utf-8").splitlines()]
@@ -90,7 +89,8 @@ def test_three_services_route_verify_and_export_together(tmp_path, services):
     # Run identity records all three servers, identically for every record.
     (run,) = {json.dumps(r["run"], sort_keys=True) for r in records}
     run = json.loads(run)
-    assert run["primary_model"] == f"remote:grounding-dino-tiny@{REVISION}" and run["primary_artifact_digest"] == WEIGHTS
+    assert run["primary_model"] == f"remote:{live.GDINO_MODEL_ID}@{live.GDINO_REVISION}"
+    assert run["primary_artifact_digest"] == live.GDINO_WEIGHTS
     assert run["relevance_scorer"].startswith("wemm:tencent/WeMM-Embedding-4B/d2560@")
     assert run["vlm_model"] == services["vlm"].model_version
 
@@ -98,7 +98,7 @@ def test_three_services_route_verify_and_export_together(tmp_path, services):
         assert r["stage_a"]["relevance_status"] != "unavailable" and set(r["stage_a"]["per_class"]) == {
             "blue_square", "red_circle"}
     verifications = [v for r in records for v in r["verifications"]]
-    assert verifications, "the VLM was never called; the run did not exercise LM Studio"
+    assert verifications, "the VLM was never called; the run did not exercise the VLM endpoint"
     assert {v["model_version"] for v in verifications} == {run["vlm_model"]}
     assert not {v["reason_code"] for v in verifications} & {"vlm_unavailable", "vlm_timeout"}
     assert any(v["verdict"] != "uncertain" for v in verifications)
@@ -134,7 +134,7 @@ def test_wemm_down_leaves_relevance_unavailable_and_warns(tmp_path, services, mo
     assert "relevance scorer failed for 1 of 1 images" in capsys.readouterr().err
 
 
-def test_lmstudio_down_gives_uncertain_verifications_and_review(tmp_path, services):
+def test_vlm_down_gives_uncertain_verifications_and_review(tmp_path, services):
     manifest, config = _inputs(tmp_path, ["square"], vlm_base_url=_closed_port_url("/v1"))
     rc, report, (rec,), _ = _shadow(tmp_path, manifest, config, services["gdino"])
     assert rc == 0 and report["errors"] == []

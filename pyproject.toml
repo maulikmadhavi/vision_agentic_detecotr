@@ -29,12 +29,12 @@ packages = ["src/routing", "src/services_embedding", "src/service_detector_vlm",
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "lmstudio: requires a running LM Studio server with a vision model",
+    "vlm: requires a reachable OpenAI-compatible VLM endpoint (VAD_VLM_URL / VAD_VLM_MODEL; default local LM Studio)",
     "gdino: requires the local Grounding DINO server (src/service_detector_gdino)",
     "wemm: requires the WeMM embedding server at $VAD_WEMM_URL",
-    "e2e: requires all three live services at once (Grounding DINO, WeMM, LM Studio)",
+    "e2e: requires all three live services at once (Grounding DINO, WeMM, VLM endpoint)",
 ]
-addopts = "-m 'not lmstudio and not gdino and not wemm and not e2e'"
+addopts = "-m 'not vlm and not gdino and not wemm and not e2e'"
 
 # --------------------------------------------------------------------------- pixi
 # Environment manager for this repo (no venv/uv/conda). `pixi run test`.
@@ -54,8 +54,10 @@ default = { features = ["dev"], solve-group = "default" }
 
 [tool.pixi.tasks]
 test = "pytest"
-test-lmstudio = "pytest -m lmstudio -rs"
+test-vlm = "pytest -m vlm -rs"
 test-gdino = "pytest -m gdino -rs"
 test-wemm = "pytest -m wemm -rs"
 test-e2e = "pytest -m e2e -rs"
+# Release check: every live test must run; an unreachable service FAILS instead of skipping.
+test-live-required = { cmd = "pytest -m 'gdino or wemm or vlm or e2e' -rs", env = { VAD_LIVE_REQUIRED = "1" } }
 export-schema = "vad-route export-schema --out schemas"

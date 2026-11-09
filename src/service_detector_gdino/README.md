@@ -28,7 +28,10 @@ pixi run -m src/service_detector_gdino/pixi.toml smoke   # real model: checks + 
 pixi run -m src/service_detector_gdino/pixi.toml serve   # start the server
 ```
 
-Then, from the repo root: `pixi run test-gdino` (live client test), or
+Then, from the repo root: `pixi run test-gdino` (live client test; it first runs one synthetic
+detection and fails if the server answers wrongly, and skips only if the server is not reachable;
+`pixi run test-live-required` fails instead). The test expects the identity above; for another
+server set `VAD_GDINO_URL`, `VAD_GDINO_MODEL_ID`, `VAD_GDINO_REVISION` and `VAD_GDINO_WEIGHTS_SHA256`. Or run:
 
 ```bash
 pixi run vad-route shadow --config ... --images ... --out runs/gd1 \
