@@ -9,3 +9,6 @@ runs/
 *.pth
 *.onnx
 .pixi/
+
+# trial images are web search results of unknown license; keep out of git
+data/
