@@ -3,12 +3,20 @@
 Fits P(class present | raw score) for each class and P(any target present | max raw score) from
 human labels (A3 format) and the raw per-class similarities a shadow run recorded in Stage A.
 Fitting uses CALIBRATION-split images only. The model is a two-parameter logistic regression,
-fitted by Newton's method (numpy only) with a small ridge on the standardized slope, so perfectly
-separable data still gives finite parameters (flagged ``separable``). It refuses to fit with fewer
-than MIN_EACH positives or negatives, per class and for any-target.
+fitted by Newton's method (numpy only) with a ridge (RIDGE) on the standardized slope. The ridge
+is applied to EVERY fit, not only to separable data: with the 20 to 30 points a calibration split
+holds, slopes are shrunk towards zero, so the parameters are penalized estimates, not plain
+maximum likelihood (the artifact records ``ridge``). Perfectly separable data still gives finite
+parameters (flagged ``separable``). It refuses to fit with fewer than MIN_EACH positives or
+negatives, per class and for any-target.
 
 The any-target probability is fitted directly (no independence assumption) and then kept
 coherent with the class probabilities: max(p_class) <= P(any) <= min(1, sum(p_class)).
+
+A fitted artifact is loaded with FittedRelevanceCalibrator.load, which refuses another score
+scale, another scorer (model, build or max_side) or other prompts. Its ``version`` carries the
+file's SHA-256, so it enters the run key only of runs that use it. A class the scorer did not
+score gets no probability: Stage A keeps it unknown and the policy sends the image to review.
 
 Real-image fitting waits for the human-labelled sample; the artifact records the labels'
 declared provenance, so a calibrator fitted on synthetic labels says so.
@@ -21,13 +29,15 @@ import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
+from pydantic import ValidationError
 
 from .evaluation import assert_split_allows
 from .metrics import load_ground_truth
 from .sample import label_digest
-from .schemas import RouteRecord, canonical_json
+from .schemas import RelevanceCalibratorArtifact, RouteRecord, TaskSpec, canonical_json
 from .task_config import RoutingConfig
 
 MIN_EACH = 10
@@ -103,7 +113,8 @@ def fit_relevance_rows(rows: Sequence[FitRow], class_ids: Sequence[str], min_eac
 
 def calibrate_scores(params: Mapping, raw: Mapping[str, float]) -> tuple[dict[str, float], float]:
     """Per-class probabilities and a coherent P(any target) for one image's raw scores."""
-    per_class = {c: _sigmoid(p["intercept"] + p["slope"] * raw[c]) for c, p in params["classes"].items()}
+    # A class without a raw score gets no probability (Stage A then treats it as unknown).
+    per_class = {c: _sigmoid(p["intercept"] + p["slope"] * raw[c]) for c, p in params["classes"].items() if c in raw}
     a = params["any_target"]
     any_p = _sigmoid(a["intercept"] + a["slope"] * max(raw[c] for c in per_class))
     low, high = max(per_class.values()), min(1.0, sum(per_class.values()))
@@ -112,6 +123,47 @@ def calibrate_scores(params: Mapping, raw: Mapping[str, float]) -> tuple[dict[st
 
 def _digest(obj) -> str:
     return hashlib.sha256(canonical_json(obj).encode()).hexdigest()
+
+
+def prompt_digest(task: TaskSpec) -> str:
+    """SHA-256 over each class id with its positive and negative prompts, in task order."""
+    return _digest([[c.class_id, list(c.positive_prompts), list(c.negative_prompts)] for c in task.classes])
+
+
+_WEMM = re.compile(r"wemm:(.+)@([^+]+)\+max(\d+)")
+
+
+class FittedRelevanceCalibrator:
+    """A RelevanceCalibrator loaded from a `vad-route fit-relevance` artifact."""
+
+    def __init__(self, artifact: RelevanceCalibratorArtifact, file_sha256: str):
+        self.artifact = artifact
+        self.version = f"{artifact.version}@sha256:{file_sha256}"
+        self._params = artifact.model_dump(mode="json")
+
+    @classmethod
+    def load(cls, path: str | Path, cfg: RoutingConfig, scorer_version: str) -> FittedRelevanceCalibrator:
+        data = Path(path).read_bytes()
+        try:
+            art = RelevanceCalibratorArtifact.model_validate_json(data)
+        except ValidationError as e:
+            raise CalibrationError(f"{path} is not a relevance calibrator: {e}") from None
+        if art.scale != cfg.relevance.raw_scale:
+            raise CalibrationError(f"the calibrator was fitted for score scale {art.scale!r}; this config declares "
+                                   f"relevance.raw_scale {cfg.relevance.raw_scale!r}")
+        if art.scorer != scorer_version:
+            fitted, used = _WEMM.fullmatch(art.scorer), _WEMM.fullmatch(scorer_version)
+            parts = [name for name, k in (("model", 1), ("build", 2), ("max_side", 3))
+                     if fitted and used and fitted.group(k) != used.group(k)]
+            raise CalibrationError(f"the calibrator was fitted for scorer {art.scorer!r}; this run uses "
+                                   f"{scorer_version!r}" + (f" (differs in {', '.join(parts)})" if parts else ""))
+        if art.prompt_sha256 != prompt_digest(cfg.task):
+            raise CalibrationError("the calibrator was fitted for other classes or prompts than this config's task "
+                                   "(prompt_sha256 differs)")
+        return cls(art, hashlib.sha256(data).hexdigest())
+
+    def calibrate(self, raw: Mapping[str, float]) -> tuple[dict[str, float], float]:
+        return calibrate_scores(self._params, raw)
 
 
 def fit_relevance(records: Sequence[RouteRecord], label_doc: Mapping, split_manifest: Mapping,
@@ -145,13 +197,11 @@ def fit_relevance(records: Sequence[RouteRecord], label_doc: Mapping, split_mani
         rows.append(FitRow(record.image.id, {c: per_class[c].raw_similarity for c in task.class_ids}, present))
     fitted = fit_relevance_rows(rows, task.class_ids)
     scorer = scorers[0]
-    wemm = re.fullmatch(r"wemm:.+@([^+]+)\+max(\d+)", scorer)
+    wemm = _WEMM.fullmatch(scorer)
     return {
         "version": "relevance-calibrator-v1", "scale": scale, "scorer": scorer,
-        "scorer_build": wemm.group(1) if wemm else None, "max_side": int(wemm.group(2)) if wemm else None,
-        "task_id": task.task_id, "class_ids": list(task.class_ids),
-        "prompt_sha256": _digest([[c.class_id, list(c.positive_prompts), list(c.negative_prompts)]
-                                  for c in task.classes]),
+        "scorer_build": wemm.group(2) if wemm else None, "max_side": int(wemm.group(3)) if wemm else None,
+        "task_id": task.task_id, "class_ids": list(task.class_ids), "prompt_sha256": prompt_digest(task),
         "label_provenance": label_doc.get("vad_label_provenance"),
         "inputs": {"labels_sha256": label_digest(label_doc),
                    "data_sha256": _digest([[r.image_id, dict(r.scores), dict(r.present)] for r in rows]),

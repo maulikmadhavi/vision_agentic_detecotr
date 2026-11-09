@@ -470,10 +470,60 @@ class ReviewedRecord(Strict):
         return self
 
 
+class LogisticFit(Strict):
+    intercept: float
+    slope: float
+    separable: bool
+    n_pos: int = Field(ge=0)
+    n_neg: int = Field(ge=0)
+
+
+class CalibratorInputs(Strict):
+    labels_sha256: str
+    data_sha256: str
+    split_manifest_sha256: str
+
+
+class CalibratorExclusions(Strict):
+    unlabelled: tuple[str, ...]
+    relevance_unavailable: tuple[str, ...]
+
+
+class RelevanceCalibratorArtifact(Strict):
+    """A fitted relevance calibrator (reviewer work order A5), as written by `vad-route fit-relevance`.
+
+    It applies only to the score ``scale``, the ``scorer`` and the prompts (``prompt_sha256``) it
+    was fitted for; loading it against anything else is refused.
+    """
+
+    version: Literal["relevance-calibrator-v1"]
+    scale: str = Field(min_length=1)
+    scorer: str = Field(min_length=1)
+    scorer_build: str | None
+    max_side: int | None
+    task_id: str
+    class_ids: tuple[str, ...] = Field(min_length=1)
+    prompt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    label_provenance: str | None
+    inputs: CalibratorInputs
+    ridge: float = Field(ge=0, description="L2 penalty on the standardized slope, applied to every fit (not only "
+                                           "separable ones): the parameters are penalized, not plain maximum likelihood")
+    min_each: int = Field(ge=1)
+    classes: dict[str, LogisticFit]
+    any_target: LogisticFit
+    excluded: CalibratorExclusions
+
+    @model_validator(mode="after")
+    def _one_fit_per_class(self) -> RelevanceCalibratorArtifact:
+        if sorted(self.classes) != sorted(self.class_ids):
+            raise ValueError(f"classes {sorted(self.classes)} do not match class_ids {sorted(self.class_ids)}")
+        return self
+
+
 EXPORTED_MODELS: tuple[type[BaseModel], ...] = (
     TaskSpec, ImageRef, Detection, StageA, StageB, RouteDecision,
     VerificationRequest, VerificationResult, AnnotationAudit, RouteRecord, ErrorRecord,
-    Adjudication, ReviewedRecord,
+    Adjudication, ReviewedRecord, RelevanceCalibratorArtifact,
 )
 
 

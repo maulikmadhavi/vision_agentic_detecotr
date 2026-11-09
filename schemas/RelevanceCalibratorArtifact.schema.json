@@ -1,0 +1,204 @@
+{
+  "$defs": {
+    "CalibratorExclusions": {
+      "additionalProperties": false,
+      "properties": {
+        "relevance_unavailable": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Relevance Unavailable",
+          "type": "array"
+        },
+        "unlabelled": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unlabelled",
+          "type": "array"
+        }
+      },
+      "required": [
+        "unlabelled",
+        "relevance_unavailable"
+      ],
+      "title": "CalibratorExclusions",
+      "type": "object"
+    },
+    "CalibratorInputs": {
+      "additionalProperties": false,
+      "properties": {
+        "data_sha256": {
+          "title": "Data Sha256",
+          "type": "string"
+        },
+        "labels_sha256": {
+          "title": "Labels Sha256",
+          "type": "string"
+        },
+        "split_manifest_sha256": {
+          "title": "Split Manifest Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "labels_sha256",
+        "data_sha256",
+        "split_manifest_sha256"
+      ],
+      "title": "CalibratorInputs",
+      "type": "object"
+    },
+    "LogisticFit": {
+      "additionalProperties": false,
+      "properties": {
+        "intercept": {
+          "title": "Intercept",
+          "type": "number"
+        },
+        "n_neg": {
+          "minimum": 0,
+          "title": "N Neg",
+          "type": "integer"
+        },
+        "n_pos": {
+          "minimum": 0,
+          "title": "N Pos",
+          "type": "integer"
+        },
+        "separable": {
+          "title": "Separable",
+          "type": "boolean"
+        },
+        "slope": {
+          "title": "Slope",
+          "type": "number"
+        }
+      },
+      "required": [
+        "intercept",
+        "slope",
+        "separable",
+        "n_pos",
+        "n_neg"
+      ],
+      "title": "LogisticFit",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "A fitted relevance calibrator (reviewer work order A5), as written by `vad-route fit-relevance`.\n\nIt applies only to the score ``scale``, the ``scorer`` and the prompts (``prompt_sha256``) it\nwas fitted for; loading it against anything else is refused.",
+  "properties": {
+    "any_target": {
+      "$ref": "#/$defs/LogisticFit"
+    },
+    "class_ids": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Class Ids",
+      "type": "array"
+    },
+    "classes": {
+      "additionalProperties": {
+        "$ref": "#/$defs/LogisticFit"
+      },
+      "title": "Classes",
+      "type": "object"
+    },
+    "excluded": {
+      "$ref": "#/$defs/CalibratorExclusions"
+    },
+    "inputs": {
+      "$ref": "#/$defs/CalibratorInputs"
+    },
+    "label_provenance": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Label Provenance"
+    },
+    "max_side": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Max Side"
+    },
+    "min_each": {
+      "minimum": 1,
+      "title": "Min Each",
+      "type": "integer"
+    },
+    "prompt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Prompt Sha256",
+      "type": "string"
+    },
+    "ridge": {
+      "description": "L2 penalty on the standardized slope, applied to every fit (not only separable ones): the parameters are penalized, not plain maximum likelihood",
+      "minimum": 0,
+      "title": "Ridge",
+      "type": "number"
+    },
+    "scale": {
+      "minLength": 1,
+      "title": "Scale",
+      "type": "string"
+    },
+    "scorer": {
+      "minLength": 1,
+      "title": "Scorer",
+      "type": "string"
+    },
+    "scorer_build": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Scorer Build"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    },
+    "version": {
+      "const": "relevance-calibrator-v1",
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "version",
+    "scale",
+    "scorer",
+    "scorer_build",
+    "max_side",
+    "task_id",
+    "class_ids",
+    "prompt_sha256",
+    "label_provenance",
+    "inputs",
+    "ridge",
+    "min_each",
+    "classes",
+    "any_target",
+    "excluded"
+  ],
+  "title": "RelevanceCalibratorArtifact",
+  "type": "object"
+}

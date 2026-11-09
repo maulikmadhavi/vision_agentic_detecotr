@@ -18,7 +18,7 @@ from service_detector_gdino.client import RemoteDetector
 from service_detector_vlm.openai_service_call import OpenAICompatibleVerifier
 from services_embedding.client import WEMM_TEXT_SCALE, WeMMMCPRelevanceScorer
 
-from .calibration import CalibrationError, fit_relevance
+from .calibration import CalibrationError, FittedRelevanceCalibrator, fit_relevance
 from .evaluation import IsolationError, load_frozen, lock_frozen_set, route_report
 from .export import export_legacy, export_reviewed, export_routed
 from .image_inputs import ManifestEntry, image_id, load_image, load_manifest
@@ -121,6 +121,8 @@ def _parser() -> argparse.ArgumentParser:
             p.add_argument("--wemm-build", help="expected meta.build; without it the version is recorded as unverified")
             p.add_argument("--wemm-max-side", type=int, default=448, help="downscale longest image side before sending")
             p.add_argument("--relevance-version", default="precomputed", help="scorer identifier only (not verified); the file's SHA-256 is bound into the run key separately")
+            p.add_argument("--relevance-calibrator", help="calibrator JSON from `vad-route fit-relevance`; refused "
+                                                          "unless its scale, scorer and prompts match this run")
             p.add_argument("--vlm", action="store_true", help="enable VLM verification at vlm.base_url (overrides config)")
             p.add_argument("--split-manifest", help="split manifest; tags each exported image with vad_split")
     return ap
@@ -402,6 +404,16 @@ def _run_shadow(parser: argparse.ArgumentParser, args: argparse.Namespace, cfg: 
     secondary = (PrecomputedDetector(args.secondary_predictions, args.secondary_version)
                  if args.secondary_predictions else None)
     relevance = _build_relevance_scorer(parser, args, cfg)
+    calibrator = None
+    if args.relevance_calibrator:
+        if relevance is None:
+            parser.error("--relevance-calibrator needs a relevance scorer (--wemm or --relevance-scores)")
+        try:
+            calibrator = FittedRelevanceCalibrator.load(args.relevance_calibrator, cfg, relevance.model_version)
+        except (CalibrationError, OSError) as e:
+            hint = " (with --relevance-scores, pass the fit-time scorer as --relevance-version)" \
+                if args.relevance_scores and "scorer" in str(e) else ""
+            parser.error(f"{e}{hint}")
     vlm = None
     if cfg.vlm.enabled:
         for name in ("base_url", "model"):
@@ -415,7 +427,8 @@ def _run_shadow(parser: argparse.ArgumentParser, args: argparse.Namespace, cfg: 
     try:
         with job_lock(out):
             store = RouteStore(out / "routes.sqlite")
-            pipe = RoutingPipeline(cfg, primary, store, secondary=secondary, relevance=relevance, vlm=vlm)
+            pipe = RoutingPipeline(cfg, primary, store, secondary=secondary, relevance=relevance,
+                                   calibrator=calibrator, vlm=vlm)
             report = _write_shadow_outputs(pipe.run(entries), cfg.task, out, splits)
     except StoreLockedError as e:
         print(f"error: {e}", file=sys.stderr)

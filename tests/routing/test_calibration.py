@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import random
@@ -11,11 +12,13 @@ import yaml
 
 from routing import cli
 from routing.calibration import (
-    MIN_EACH, CalibrationError, FitRow, calibrate_scores, fit_logistic, fit_relevance, fit_relevance_rows,
+    MIN_EACH, CalibrationError, FitRow, FittedRelevanceCalibrator, calibrate_scores, fit_logistic, fit_relevance,
+    fit_relevance_rows,
 )
 from routing.evaluation import IsolationError
 from routing.image_inputs import ManifestEntry
 from routing.pipeline import RoutingPipeline
+from routing.schemas import RelevanceCalibratorArtifact, RouteRecord
 from routing.store import RouteStore
 
 from .helpers import CLASS_A, CLASS_B, ScriptedDetector, ScriptedRelevance, config, draw
@@ -132,7 +135,7 @@ def test_any_target_stays_within_the_coherent_range():
 SCALE_CFG = config(relevance={"raw_scale": "test_scale_v1", "raw_high": 0.6, "raw_low": 0.2})
 
 
-def _records(tmp_path, n=30):
+def _records(tmp_path, n=30, scorer="rel@1"):
     rng, records, label_images, label_anns, manifest = random.Random(5), [], [], [], {}
     for k in range(n):
         name = f"img{k}"
@@ -141,7 +144,7 @@ def _records(tmp_path, n=30):
                   CLASS_B: (0.5 if has_b else 0.2) + rng.uniform(-0.15, 0.15)}
         entry = ManifestEntry(str(draw(tmp_path / f"{name}.png", (64, 48), [])), image_id=name)
         records.append(RoutingPipeline(SCALE_CFG, ScriptedDetector({}), RouteStore(":memory:"),
-                                       relevance=ScriptedRelevance({name: scores})).process(entry))
+                                       relevance=ScriptedRelevance({name: scores}, scorer)).process(entry))
         label_images.append({"id": k + 1, "vad_image_id": name, "width": 64, "height": 48, "vad_exhaustive": True})
         for cat, present in ((1, has_a), (2, has_b)):
             if present:
@@ -227,3 +230,140 @@ def test_cli_fit_relevance_writes_the_artifact_and_never_overwrites(tmp_path):
     with pytest.raises(SystemExit) as exc:
         cli.main(args)
     assert exc.value.code == 2
+
+
+# --- A5 stage 2: the artifact as a strict model, loading it, and using it in a run ---------------
+
+
+def _artifact_file(tmp_path, name="cal.json", **patch):
+    records, labels, manifest = _records(tmp_path)
+    art = {**fit_relevance(records, labels, manifest, SCALE_CFG), **patch}
+    path = tmp_path / name
+    path.write_text(json.dumps(art, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def test_a_fitted_artifact_is_a_valid_strict_model(tmp_path):
+    records, labels, manifest = _records(tmp_path)
+    art = fit_relevance(records, labels, manifest, SCALE_CFG)
+    assert RelevanceCalibratorArtifact.model_validate(art).model_dump(mode="json") == art
+
+
+@pytest.mark.parametrize("patch", [{"surprise": 1}, {"version": "relevance-calibrator-v0"}, {"classes": {}}])
+def test_a_malformed_artifact_is_refused_on_load(tmp_path, patch):
+    path = _artifact_file(tmp_path, **patch)
+    with pytest.raises(CalibrationError, match="not a relevance calibrator"):
+        FittedRelevanceCalibrator.load(path, SCALE_CFG, "rel@1")
+
+
+def test_a_loaded_calibrator_is_identified_by_version_and_file_digest(tmp_path):
+    path = _artifact_file(tmp_path)
+    cal = FittedRelevanceCalibrator.load(path, SCALE_CFG, "rel@1")
+    assert cal.version == "relevance-calibrator-v1@sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    art = json.loads(path.read_text(encoding="utf-8"))
+    raw = {CLASS_A: 0.4, CLASS_B: 0.3}
+    assert cal.calibrate(raw) == calibrate_scores(art, raw)
+
+
+def test_loading_refuses_a_different_score_scale(tmp_path):
+    path = _artifact_file(tmp_path)
+    other = config(relevance={"raw_scale": "other_scale_v2", "raw_high": 0.6, "raw_low": 0.2})
+    with pytest.raises(CalibrationError, match="scale.*test_scale_v1.*other_scale_v2"):
+        FittedRelevanceCalibrator.load(path, other, "rel@1")
+
+
+WEMM = "wemm:org/model/d2560@b1+max448"
+
+
+@pytest.mark.parametrize("used, part", [("wemm:org/other/d2560@b1+max448", "model"),
+                                        ("wemm:org/model/d2560@b2+max448", "build"),
+                                        ("wemm:org/model/d2560@b1+max896", "max_side")])
+def test_loading_refuses_a_different_scorer_and_names_the_part(tmp_path, used, part):
+    path = _artifact_file(tmp_path, scorer=WEMM, scorer_build="b1", max_side=448)
+    assert FittedRelevanceCalibrator.load(path, SCALE_CFG, WEMM).version
+    with pytest.raises(CalibrationError, match=f"scorer.*differs in {part}"):
+        FittedRelevanceCalibrator.load(path, SCALE_CFG, used)
+
+
+def test_a_wemm_scorer_s_build_and_max_side_are_recorded(tmp_path):
+    records, labels, manifest = _records(tmp_path, scorer=WEMM)
+    art = fit_relevance(records, labels, manifest, SCALE_CFG)
+    assert (art["scorer"], art["scorer_build"], art["max_side"]) == (WEMM, "b1", 448)
+
+
+def test_loading_refuses_a_non_wemm_scorer_with_another_version(tmp_path):
+    with pytest.raises(CalibrationError, match="rel@1.*rel@2"):
+        FittedRelevanceCalibrator.load(_artifact_file(tmp_path), SCALE_CFG, "rel@2")
+
+
+def test_loading_refuses_different_prompts(tmp_path):
+    path = _artifact_file(tmp_path)
+    task = SCALE_CFG.task.model_dump()
+    task["classes"][1]["positive_prompts"] = ["a red custom thing, close up"]
+    changed = SCALE_CFG.model_copy(update={"task": type(SCALE_CFG.task).model_validate(task)})
+    with pytest.raises(CalibrationError, match="prompt"):
+        FittedRelevanceCalibrator.load(path, changed, "rel@1")
+
+
+def _route(cal, scores, image="one"):
+    return RoutingPipeline(SCALE_CFG, ScriptedDetector({}), RouteStore(":memory:"),
+                           relevance=ScriptedRelevance({image: scores}), calibrator=cal)
+
+
+def test_a_class_without_a_score_stays_unknown_and_goes_to_human_review(tmp_path):
+    cal = FittedRelevanceCalibrator.load(_artifact_file(tmp_path), SCALE_CFG, "rel@1")
+    entry = ManifestEntry(str(draw(tmp_path / "one.png", (64, 48), [])), image_id="one")
+    record = _route(cal, {CLASS_A: 0.05}).process(entry)  # class B was not scored
+    assert isinstance(record, RouteRecord)
+    sa = record.stage_a
+    assert sa.relevance_status == "calibrated"
+    assert sa.per_class[CLASS_A].relevance_probability is not None and CLASS_B not in sa.per_class
+    assert sa.relevance_band != "low" and "calibrator_output_incomplete_or_inconsistent" in sa.warnings
+    assert f"calibrator_missing_class:{CLASS_B}" in record.route.reason_codes
+    assert "human_review" in record.route.actions
+
+
+def test_the_calibrator_enters_the_run_key_and_runs_without_it_keep_theirs(tmp_path):
+    first = _artifact_file(tmp_path)
+    second = tmp_path / "cal2.json"
+    second.write_text(first.read_text(encoding="utf-8") + "\n", encoding="utf-8")  # one byte more
+    entry = ManifestEntry(str(draw(tmp_path / "one.png", (64, 48), [])), image_id="one")
+    scores = {CLASS_A: 0.4, CLASS_B: 0.3}
+    cals = (None, FittedRelevanceCalibrator.load(first, SCALE_CFG, "rel@1"),
+            FittedRelevanceCalibrator.load(second, SCALE_CFG, "rel@1"))
+    keys = [_route(cal, scores).process(entry).record_id for cal in cals]
+    assert len(set(keys)) == 3
+    assert keys[0] == _route(None, scores).process(entry).record_id
+
+
+def _shadow_args(tmp_path, *extra):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(yaml.safe_dump(SCALE_CFG.model_dump(mode="json")), encoding="utf-8")
+    draw(tmp_path / "one.png", (64, 48), [])
+    rows = {"manifest": {"uri": "one.png", "image_id": "one"}, "preds": {"image_id": "one", "detections": []},
+            "rel": {"image_id": "one", "scores": {CLASS_A: 0.4, CLASS_B: 0.3}}}
+    for name, row in rows.items():
+        (tmp_path / f"{name}.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+    return ["shadow", "--config", str(cfg), "--images", str(tmp_path / "manifest.jsonl"), "--primary-predictions",
+            str(tmp_path / "preds.jsonl"), "--primary-version", "prim@1", "--out", str(tmp_path / "run"), *extra]
+
+
+def test_cli_shadow_uses_the_calibrator_and_records_its_identity(tmp_path):
+    path = _artifact_file(tmp_path)
+    args = _shadow_args(tmp_path, "--relevance-scores", str(tmp_path / "rel.jsonl"), "--relevance-version", "rel@1",
+                        "--relevance-calibrator", str(path))
+    assert cli.main(args) == 0
+    record = RouteRecord.model_validate_json((tmp_path / "run" / "route_trace.jsonl").read_text(encoding="utf-8"))
+    assert record.run.relevance_calibrator == FittedRelevanceCalibrator.load(path, SCALE_CFG, "rel@1").version
+    assert record.stage_a.relevance_status == "calibrated"
+
+
+def test_cli_shadow_refuses_a_calibrator_without_a_scorer_or_for_another_scorer(tmp_path, capsys):
+    path = _artifact_file(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        cli.main(_shadow_args(tmp_path, "--relevance-calibrator", str(path)))
+    assert exc.value.code == 2 and "needs a relevance scorer" in capsys.readouterr().err
+    with pytest.raises(SystemExit) as exc:
+        cli.main(_shadow_args(tmp_path, "--relevance-scores", str(tmp_path / "rel.jsonl"),
+                              "--relevance-calibrator", str(path)))
+    assert exc.value.code == 2 and "--relevance-version" in capsys.readouterr().err
