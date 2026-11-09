@@ -161,6 +161,13 @@ def test_second_reviewer_must_be_a_different_human_handle(handle):
         merge_reviews(labels, _second(labels, _queue_ids(queue), reviewer=handle), queue, {}, task())
 
 
+def test_a_refused_handle_says_which_token_matched():
+    labels, groups = _first()
+    queue = review_queue(labels, groups, task(), seed=5)
+    with pytest.raises(SampleError, match="'dino'.*guard against pasted model ids"):
+        merge_reviews(labels, _second(labels, _queue_ids(queue), reviewer="Dinoyo"), queue, {}, task())
+
+
 def test_the_second_pass_must_cover_exactly_the_queue():
     labels, groups = _first()
     queue = review_queue(labels, groups, task(), seed=5)

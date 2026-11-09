@@ -23,6 +23,32 @@ CandidateStatus = Literal["accepted", "candidate", "needs_review", "rejected"]
 CompletenessStatus = Literal["complete", "needs_review", "unresolved"]
 
 
+_MODEL_TOKENS = ("vlm", "gpt", "qwen", "llama", "claude", "gemini", "mistral", "dino", "wemm", "clip", "model",
+                 "detector", "openai", "lmstudio")
+
+
+def check_reviewer_handle(handle: object, role: str) -> str:
+    """A reviewer is a free-text human handle. Model-like ids are refused: a guard against pasted
+    model ids, not authentication (a real name can trip it; the message says why)."""
+    text = handle.strip() if isinstance(handle, str) else ""
+    if not text:
+        raise ValueError(f"{role} reviewer handle is empty; use a person's handle")
+    guard = "this is a guard against pasted model ids; use a person's handle"
+    if bad := next((ch for ch in ":@/" if ch in text), None):
+        raise ValueError(f"{role} reviewer handle {handle!r} contains {bad!r}, as model ids do; {guard}")
+    if token := next((t for t in _MODEL_TOKENS if t in text.lower()), None):
+        raise ValueError(f"{role} reviewer handle {handle!r} contains {token!r}; {guard} "
+                         f"(pick a variant without {token!r})")
+    return text
+
+
+def _valid_xyxy(b: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+    x1, y1, x2, y2 = b
+    if not (0 <= x1 < x2 and 0 <= y1 < y2):
+        raise ValueError(f"invalid xyxy box {b}: need 0 <= x1 < x2 and 0 <= y1 < y2")
+    return b
+
+
 def canonical_json(obj: Any) -> str:
     if isinstance(obj, BaseModel):
         obj = obj.model_dump(mode="json")
@@ -94,10 +120,7 @@ class Detection(Strict):
     @field_validator("box_xyxy")
     @classmethod
     def _box_order(cls, b: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
-        x1, y1, x2, y2 = b
-        if not (0 <= x1 < x2 and 0 <= y1 < y2):
-            raise ValueError(f"invalid xyxy box {b}: need 0 <= x1 < x2 and 0 <= y1 < y2")
-        return b
+        return _valid_xyxy(b)
 
     def check_in(self, image: ImageRef, class_ids: tuple[str, ...]) -> None:
         if self.class_id not in class_ids:
@@ -342,9 +365,115 @@ class ErrorRecord(Strict):
     config_hash: str
 
 
+# --------------------------------------------------------------------------- human review (A7)
+
+
+AdjudicationDecision = Literal["accept", "reject", "reclassify", "add_box", "class_absent", "complete"]
+_NEEDS = {  # decision -> (candidate_id, class_id, box_xyxy) required (True) or forbidden (False)
+    "accept": (True, False, False), "reject": (True, False, False), "reclassify": (True, True, False),
+    "add_box": (False, True, True), "class_absent": (False, True, False), "complete": (False, False, False),
+}
+
+
+class Adjudication(Strict):
+    """One human decision on one finding of a routed image (reviewer work order A7).
+
+    ``accept`` / ``reject`` / ``reclassify`` act on a model candidate; ``add_box`` draws a
+    missing object; ``class_absent`` confirms a suspected class is not there; ``complete``
+    closes the image once its findings are decided. ``decided_at`` is supplied by the caller
+    (no hidden clock). ``id`` is derived from the content, so an edited line no longer verifies.
+    """
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    id: str = ""
+    record_id: str = Field(min_length=1)
+    image_id: str = Field(min_length=1)
+    decision: AdjudicationDecision
+    candidate_id: str | None = None
+    class_id: str | None = None
+    box_xyxy: tuple[float, float, float, float] | None = None
+    reviewer: str
+    reason: str = ""
+    decided_at: str
+    source: Literal["human"] = "human"
+
+    @field_validator("reviewer")
+    @classmethod
+    def _human_handle(cls, v: str) -> str:
+        return check_reviewer_handle(v, "adjudicating")
+
+    @field_validator("decided_at")
+    @classmethod
+    def _iso_with_zone(cls, v: str) -> str:
+        from datetime import datetime
+        try:
+            moment = datetime.fromisoformat(v)
+        except ValueError:
+            raise ValueError("decided_at must be an ISO 8601 date-time") from None
+        if moment.tzinfo is None:
+            raise ValueError("decided_at needs a time zone, e.g. 2026-11-10T09:30:00+08:00")
+        return v
+
+    @field_validator("box_xyxy")
+    @classmethod
+    def _box_order(cls, b):
+        return None if b is None else _valid_xyxy(b)
+
+    @model_validator(mode="after")
+    def _shape_and_id(self) -> Adjudication:
+        for name, needed in zip(("candidate_id", "class_id", "box_xyxy"), _NEEDS[self.decision]):
+            present = getattr(self, name) is not None
+            if needed and not present:
+                raise ValueError(f"decision {self.decision!r} needs {name}")
+            if present and not needed:
+                raise ValueError(f"decision {self.decision!r} does not take {name}")
+        expected = stable_id("adj", self.model_dump(mode="json", exclude={"id"}))
+        if not self.id:
+            object.__setattr__(self, "id", expected)
+        elif self.id != expected:
+            raise ValueError("id does not match the adjudication content (edited after it was recorded?)")
+        return self
+
+
+class ReviewedRecord(Strict):
+    """A routed image after human adjudication.
+
+    Model suggestions stay in the base RouteRecord (``record_id``); human-drawn boxes are
+    ``human_detections`` with source "human"; ``final_candidates`` and ``completeness`` are the
+    reviewed state.
+    """
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    record_id: str
+    image: ImageRef
+    task: TaskSpec
+    adjudications: tuple[Adjudication, ...]
+    human_detections: tuple[Detection, ...] = ()
+    final_candidates: tuple[FinalCandidate, ...]
+    completeness: AnnotationAudit
+
+    @model_validator(mode="after")
+    def _consistent(self) -> ReviewedRecord:
+        ids = self.task.class_ids
+        for d in self.human_detections:
+            if d.source != "human":
+                raise ValueError(f"human_detections must have source 'human'; {d.id} has {d.source!r}")
+            d.check_in(self.image, ids)
+        for a in self.adjudications:
+            if a.record_id != self.record_id:
+                raise ValueError(f"adjudication {a.id} is for record {a.record_id!r}, not {self.record_id!r}")
+            if a.image_id != self.image.id:
+                raise ValueError(f"adjudication {a.id} is for image {a.image_id!r}, not {self.image.id!r}")
+        for f in self.final_candidates:
+            if f.class_id not in ids:
+                raise ValueError(f"final candidate has unknown class_id {f.class_id!r}")
+        return self
+
+
 EXPORTED_MODELS: tuple[type[BaseModel], ...] = (
     TaskSpec, ImageRef, Detection, StageA, StageB, RouteDecision,
     VerificationRequest, VerificationResult, AnnotationAudit, RouteRecord, ErrorRecord,
+    Adjudication, ReviewedRecord,
 )
 
 

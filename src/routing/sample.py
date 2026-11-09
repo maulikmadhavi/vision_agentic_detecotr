@@ -26,7 +26,7 @@ from PIL import Image, ImageOps
 
 from .image_inputs import ManifestEntry, load_image
 from .metrics import GroundTruthBox, GroundTruthImage, Prediction, load_ground_truth, match_image
-from .schemas import TaskSpec, canonical_json, stable_id
+from .schemas import TaskSpec, canonical_json, check_reviewer_handle, stable_id
 
 REVIEW_MARGIN = 4
 EXCLUSION_REASONS = ("illustration", "collage", "screenshot", "duplicate", "license_unclear", "other")
@@ -284,8 +284,6 @@ def make_split(groups_doc: Mapping, exclusions_doc: Mapping, label_doc: Mapping,
 # --------------------------------------------------------------------------- second review
 
 SECOND_REVIEW_FRACTION = 0.2  # of the groups that are not already queued as ambiguous
-_MODEL_TOKENS = ("vlm", "gpt", "qwen", "llama", "claude", "gemini", "mistral", "dino", "wemm", "clip", "model",
-                 "detector", "openai", "lmstudio")
 
 
 class UnresolvedReviews(SampleError):
@@ -298,12 +296,11 @@ class UnresolvedReviews(SampleError):
 
 
 def _check_handle(handle: object, role: str) -> str:
-    """A reviewer is a free-text human handle; model-like ids are refused (a guard, not authentication)."""
-    text = handle.strip() if isinstance(handle, str) else ""
-    lowered = text.lower()
-    if not text or any(ch in text for ch in ":@/") or any(token in lowered for token in _MODEL_TOKENS):
-        raise SampleError(f"{role} reviewer handle {handle!r} is empty or looks like a model id; use a person's handle")
-    return text
+    """The shared reviewer-handle rule (:func:`routing.schemas.check_reviewer_handle`), as a SampleError."""
+    try:
+        return check_reviewer_handle(handle, role)
+    except ValueError as e:
+        raise SampleError(str(e)) from None
 
 
 def _label_digest(label_doc: Mapping) -> str:

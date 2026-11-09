@@ -1,0 +1,119 @@
+{
+  "additionalProperties": false,
+  "description": "One human decision on one finding of a routed image (reviewer work order A7).\n\n``accept`` / ``reject`` / ``reclassify`` act on a model candidate; ``add_box`` draws a\nmissing object; ``class_absent`` confirms a suspected class is not there; ``complete``\ncloses the image once its findings are decided. ``decided_at`` is supplied by the caller\n(no hidden clock). ``id`` is derived from the content, so an edited line no longer verifies.",
+  "properties": {
+    "box_xyxy": {
+      "anyOf": [
+        {
+          "maxItems": 4,
+          "minItems": 4,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Box Xyxy"
+    },
+    "candidate_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Candidate Id"
+    },
+    "class_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Class Id"
+    },
+    "decided_at": {
+      "title": "Decided At",
+      "type": "string"
+    },
+    "decision": {
+      "enum": [
+        "accept",
+        "reject",
+        "reclassify",
+        "add_box",
+        "class_absent",
+        "complete"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "id": {
+      "default": "",
+      "title": "Id",
+      "type": "string"
+    },
+    "image_id": {
+      "minLength": 1,
+      "title": "Image Id",
+      "type": "string"
+    },
+    "reason": {
+      "default": "",
+      "title": "Reason",
+      "type": "string"
+    },
+    "record_id": {
+      "minLength": 1,
+      "title": "Record Id",
+      "type": "string"
+    },
+    "reviewer": {
+      "title": "Reviewer",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source": {
+      "const": "human",
+      "default": "human",
+      "title": "Source",
+      "type": "string"
+    }
+  },
+  "required": [
+    "record_id",
+    "image_id",
+    "decision",
+    "reviewer",
+    "decided_at"
+  ],
+  "title": "Adjudication",
+  "type": "object"
+}
