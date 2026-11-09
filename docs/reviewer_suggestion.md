@@ -1,6 +1,22 @@
 # Reviewer suggestions — adaptive object detection routing
 
-## Naming and structure review — 2026-11-09
+## Current review — service split and integration, 2026-11-09
+
+**Verified:** clean worktree at `045d525`; `.pixi\envs\default\python.exe -m pytest -q` → **152 passed, 1 skipped, 4 deselected**. This is the local CPU/mock suite; the skipped FastAPI server test and four live model tests were not independently run here. The old `RemoteRelevanceScorer` CLI patch concern was checked and is **resolved**: `tests/services/test_wemm_mcp.py` patches `WeMMMCPRelevanceScorer`.
+
+**Implemented since the earlier review:** `routing` now owns orchestration, inputs, store, interfaces and box normalization; `services` holds replay, HTTP detector, WeMM MCP, LM Studio, OpenCLIP, shared runtime helpers and the Grounding DINO server. The CLI, root Pixi package, service Pixi workspace, imports and tests were updated. A golden record-key test guards the rename. Earlier proposed paths and compatibility aliases below are historical; the implementer deliberately removed `vad.routing` and old aliases rather than keeping shims.
+
+| Priority | Finding | Suggested change and evidence |
+|---|---|---|
+| P1 before external adoption | `src/services` is installed in the **same** `vad` wheel as `src/routing` (`pyproject.toml`), and `services.contracts` imports `routing.schemas`. The Grounding DINO service has its own Pixi environment, but shares the root package and wire models. This is process/dependency separation, not an independently versioned service contract; the generic top-level `services` import also risks collision in a larger host environment. | Decide whether this coupling is acceptable for one repository. If independent deployment is required, put the `svc-1.0` contract in a small versioned shared package, give client/server explicit package names, and test a server install against that wheel. Do this before promising independently upgradable services. |
+| P2 | CI installs the default environment; `tests/services/grounding_dino/test_server.py` skips without FastAPI. The green default suite therefore does not execute the server's request/response contract after these moves. | Add a separate CI job using `src/services/grounding_dino/pixi.toml` that runs its fake-model tests with a locked install. Keep live GPU checks optional. |
+| P2 | `services.wemm_mcp.score` uses only positive prompts, although Stage A passes positive **and negative** prompts. Its `max(cosine)` scale is documented, but changing prompt composition could materially change scores. The scorer accepts `@unverified` when no server build is reported. | Keep the current score definition until measured on labelled data; record this limitation in active docs. Add a verified build/revision to the server response and require it for promotion or long-lived cache reuse. Recalibrate thresholds if negatives, instruction strings, or pooling change. |
+| P2 | `services.wemm_mcp.score` builds a dictionary by match index, so duplicate indices overwrite earlier scores silently; it reads only the first result row. A malformed or future multi-row MCP reply can be treated as a valid score set if all expected indices appear. | Require exactly one result row and exactly one finite match per expected index, and verify query identity or cardinality where the MCP contract exposes it. Add malformed-response tests for duplicates/extra rows. |
+| P2 documentation | The historical sections below still describe `src/vad`, `third_party_service`, and remote clients as proposals. `docs/project_board.md` now records F-39 correctly, but readers of this review can mistake the older tables for current architecture. | Archive or condense the obsolete proposed tree after this review is accepted; keep this section and the board as the current status. Refresh the live-test and deployment claims with dated evidence when reproduced. |
+
+**Keep:** per-class Grounding DINO passes avoid ambiguous phrase-to-class mapping; explicit zero-detection versus failure responses; data-URI transport for WeMM; scorer failures become unknown relevance/review; response identity checks and bounded image size. Real-image calibration, detector false positives, and frozen-set benchmarks remain the main release gates. No application source was changed in this review.
+
+## Earlier naming and structure review — superseded by F-39
 
 **Scope:** inspected adapter implementations, orchestration/persistence, service contracts, CLI wiring, Grounding DINO startup, packaging, and representative test imports. This is a maintainability review, not a complete correctness audit; no source files were changed or model services called. Earlier test counts below are historical and were not rerun for this review.
 
