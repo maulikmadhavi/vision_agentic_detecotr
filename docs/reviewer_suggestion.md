@@ -2,13 +2,23 @@
 
 **Reviewed:** 2026-11-09 · **Status:** phases 0–4 implemented for the greenfield repository; Phase 5 has utilities but no real-data calibration; Phase 6 has not started. Routing remains disabled by default. See [project_board.md](project_board.md) for the plan and project tasks.
 
-**Verification:** the default suite passed **91 tests**; two optional live tests (CLIP weights and LM Studio) were deselected. The implemented paths have mostly been exercised with a tiny fixture and scripted detectors. These results do not establish performance on real images.
+**Verification (Pixi review, 2026-11-09):** `.pixi\envs\default\python.exe -m pytest -q` passed **92 tests, 2 deselected**. `pixi run --locked test` stopped before tests because this review sandbox could not persist a Pixi/uv interpreter-cache file (access denied). This is an environment limitation, not evidence of a repository defect. A fresh locked installation, Linux execution and the optional live tests were not verified in this review.
 
-## Open finding
+## Latest review: Pixi and project board
 
-[P2] Route a class with no calibrated probability to an explicit reviewer — `src/vad/routing/scoring.py:103`
+No new source-code defect was confirmed in the reviewed Pixi migration. `pyproject.toml` defines separate default/dev and CLIP environments; `pixi.lock` contains Windows and Linux resolutions and CUDA 12.8 torch; `.pixi/` is ignored. The previous P2 handoff is **fixed** in `76455b3`: omitted calibrated classes receive a `human_review` action and a structured suspected-class entry, with an enabled-VLM regression test.
 
-When the calibrator omits a class, `class_is_high_relevance` returns `False`. For a zero-box image with a VLM enabled, the raised medium band can select `vlm_verify`, yet `_verify` sends **no request** for that class. `completeness.audit` later records `calibrator_missing_class:<id>` and `unresolved`, but the route has no `human_review` action and `suspected_missing_classes` omits the class. I reproduced `actions=('vlm_verify',)`, zero VLM requests and `status='unresolved'`. **Suggested solution:** carry a per-class `unknown` state into routing. Either verify the missing class or add an explicit human-review action and structured missing-class item; never fall back to the raw threshold. Add a regression test with the VLM enabled. The current T-6 tests use no VLM.
+Suggested additions, rather than confirmed runtime defects:
+
+| Gap | Possible solution / completion evidence |
+|---|---|
+| Reproducibility is not checked on a clean machine or Linux; there is no CI workflow. | Record the tested Pixi version and add Windows/Linux CI using locked install/run commands. Run the default suite and a package-import smoke check; keep GPU and LM Studio checks separate. Verify that the lockfile remains unchanged. |
+| Live model prerequisites are outside the lockfile. The CLIP test skips when no local weights exist, so a successful task exit alone does not prove CLIP ran. | Document the checkpoint source, expected digest, `VAD_CLIP_WEIGHTS`, LM Studio endpoint/model ID, and a GPU availability check. Record passed/skipped counts and environment with each live result. Add a required-assets preflight for release validation. |
+| Fresh-shell command examples depend on activation, and the board assumes Pixi is already installed. | Add a short Pixi installation prerequisite; use `pixi run vad-route ...` consistently, and `pixi run -e clip ...` for CLIP. Include a PowerShell-compatible example for the Windows development setup. |
+| The checklist marks “Rules 1–8” complete while domain-distance and its audit sampling remain absent (T-4). Persistence wording also implies all external calls are at-most-once, although only VLM calls have durable attempt markers. | Mark the rule group partial or enumerate completed rules. Describe detector resume as reuse of persisted results and VLM resume as at-most-once; retain the known crash-before-persist limitation for detector calls. |
+| The full specification now exists only in Git history. The board references removed “Part B/C/D” concepts in older supporting material and can drift from the requirements. | Keep a stable, linked `docs/specification.md` for requirements and acceptance criteria, with the board tracking status only. Preserve the full baseline/always-expensive/adaptive benchmark and promotion gates already restored in B-4/B-5. |
+
+The new T-7 (reviewer-outcome ingestion), T-8 (detection metrics) and T-9 (split enforcement) correctly expose previously missing workflows. Keep them open until exercised end to end, even though their supporting utility tests pass.
 
 ## Implemented and reviewed
 
@@ -18,11 +28,26 @@ When the calibrator omits a class, `class_is_high_relevance` returns `False`. Fo
 | Routing and detection | Separate relevance, difficulty and completeness; deterministic policy; primary prediction replay; optional secondary and native sliced inference; original-image box coordinates and provenance. | Acceptance tests cover zero boxes, disagreement, replay, coordinates and budgets. Slicing uses scripted crop-capable detectors, not a production adapter. |
 | Verification and recovery | LM Studio VLM is verifier-only; uncertain responses go to review. SQLite caches steps, records an attempt before a VLM call, and makes an interrupted call `uncertain` on resume. | At-most-once call behavior trades a potentially lost answer for no repeat call. Live VLM testing was reported previously, not rerun in this review. |
 | Export and evaluation utilities | Current-run-only annotation export, per-image error queue, frozen-set lock/isolation helpers, VLM-vs-human agreement scoring. | Frozen-set checks are utilities; the shadow CLI does not enforce split isolation. The export loader substitutes for a nonexistent trainer. |
-| Calibrator guards | Incomplete raw or calibrated per-class output cannot produce a low relevance band; a missing calibrated class does not use raw thresholds. | The open finding above concerns the subsequent verification/review handoff. No fitted calibrator or human-labelled dataset exists yet. |
+| Calibrator guards | Incomplete raw or calibrated per-class output cannot produce a low relevance band; a missing calibrated class does not use raw thresholds. | Missing probabilities now trigger explicit human review. No fitted calibrator or human-labelled dataset exists yet. |
 
 Earlier review findings are fixed and covered by regressions: SAHI parent provenance and per-tile budgets; cached Stage A and explicit prediction rows; current-run export isolation (R3-1); cross-class VLM review (R3-2); at-most-once recovery (R3-3); incomplete low-band guard (R3-4/R4-1); and blocking a bare human `complete` when evidence remains open (R3-5). The implementation and tests are in commits `f2dd581`–`6a31afd` and `tests/routing/test_r3.py`. An explicit per-finding human adjudication record remains to be designed if reviewers must resolve open findings in the application.
 
 ## Remaining work and possible solutions
+
+### Candidate for T-1: NVIDIA TAO Grounding DINO
+
+**Recommendation:** trial pretrained Grounding DINO as the primary detector before adopting TAO for training. Its text-conditioned boxes suit the custom class registry; Qwen remains the verifier. Use descriptive prompts rather than opaque class IDs, and map results back to registry IDs. Recognition of unfamiliar parts still needs measurement on real images. TAO supports training, evaluation and export as later integration options ([model documentation](https://docs.nvidia.com/tao/tao-toolkit/latest/text/cv_finetuning/pytorch/object_detection/grounding_dino.html)).
+
+| Integration requirement | Proposed approach |
+|---|---|
+| Environment and hardware | Keep the router in Pixi and TAO in a separate Linux GPU container environment. NVIDIA documents a Linux host or remote Docker daemon. Validate the chosen release on the RTX 5070 (12 GB); compatibility and memory use alongside CLIP/Qwen are untested here ([TAO prerequisites](https://docs.nvidia.com/tao/tao-toolkit/latest/text/getting_started.html)). |
+| Data formats | TAO Grounding DINO uses ODVG JSONL for training and COCO validation with contiguous category IDs starting at 0. Our COCO-style export starts at 1: add an explicit mapping/conversion. Its KITTI inference labels can first be converted to our prediction JSONL, including empty rows for processed images with no boxes. |
+| Live adapter and slicing | Implement `Detector` with original-image xyxy boxes, raw scores, class mapping, weights digest and measured GPU time. Enable crops only after tile-edge and overlap tests pass; apply tile offsets exactly once. |
+| Deployment optimization | Consider FP16 TensorRT only after establishing accuracy and resource baselines; TAO Deploy provides engine generation and inference ([deployment documentation](https://docs.nvidia.com/tao/tao-toolkit/latest/text/tao_deploy/grounding_dino.html)). |
+
+**Trial sequence:** use a pretrained Swin-Tiny checkpoint on 30–50 representative development images; convert predictions and run shadow mode; compare with human labels for missed objects, false positives, latency and peak VRAM. If useful, build the live crop-capable adapter, then evaluate fine-tuning and TensorRT. This small trial is a feasibility check, not a substitute for the frozen benchmark or promotion gates. A later faster primary could use Grounding DINO as a secondary detector if the measured recovery justifies its cost.
+
+### Other remaining work
 
 1. **Real detector and real-image shadow:** choose a primary detector, add a crop-capable adapter with a weights digest and measured GPU time, and replay or run predictions on representative images. Add an independent secondary detector only if it provides useful recovery.
 2. **Human data and calibration:** label a sample across classes, domains, sizes and negatives; split by source/near-duplicate group. Fit relevance and difficulty calibrators on calibration data, choose thresholds on development data, and record data/model hashes. Decide CLIP score bands from that sample; replayed JSONL scores currently have no scale guard.
@@ -30,4 +55,4 @@ Earlier review findings are fixed and covered by regressions: SAHI parent proven
 4. **Trainer and rollout:** connect the annotation export to an actual training entry point, then run a canary by source group with a versioned rollback configuration. Keep automatic discard disabled until the frozen gates pass.
 5. **VLM policy:** compare the 4B and 8B models against human labels on real crops before considering `vlm.absent_rejects: true`; keep the safer `false` default in the meantime.
 
-**Suggested order:** fix the open reviewer handoff, collect real predictions and labels, calibrate and benchmark on isolated splits, then consider canary rollout.
+**Suggested order:** verify clean locked environments and model prerequisites; collect real predictions and labels; implement reviewer ingestion, metrics and split enforcement; calibrate and benchmark; then consider canary rollout.
