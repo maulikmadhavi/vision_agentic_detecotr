@@ -3,7 +3,10 @@
 Order per image: validate -> Stage A -> primary -> Stage B -> route (persisted)
 -> optional secondary / SAHI -> match + fuse -> bounded VLM -> completeness ->
 persisted RouteRecord. Every expensive step result is cached under the record
-key, so a restarted job never repeats a detector or VLM call.
+key once it returns, so a restarted job reuses it. A crash after a detector call but
+before its result is persisted can repeat that call (sliced inference is cached only
+after the whole sliced pass). VLM requests are at-most-once: an attempt marker is
+persisted before sending, and an interrupted request is recorded as uncertain, never re-sent.
 """
 
 from __future__ import annotations

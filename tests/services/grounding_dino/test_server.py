@@ -1,7 +1,7 @@
 """Server tests with a fake model (no torch, no weights, no GPU).
 
-Run in the service environment: pixi run -m src/service_detector_gdino/pixi.toml test
-(skipped in the root environment, which has no fastapi).
+Runs in the root default suite (the dev feature includes fastapi) and in the service
+environment: pixi run -m src/service_detector_gdino/pixi.toml test
 """
 
 from __future__ import annotations

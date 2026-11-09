@@ -41,9 +41,72 @@ def test_same_model_on_two_endpoints_has_two_identities():
     assert a != b
 
 
-def test_identity_never_contains_url_credentials():
-    v = OpenAICompatibleVerifier("https://user:pa55word@vlm.example/v1/", "m")
-    assert v.model_version == "openai-compatible:m@vlm.example/v1" and "pa55word" not in v.model_version
+@pytest.mark.parametrize("url", ["https://user:pa55word@vlm.example/v1/", "https://tok3n-in-url@vlm.example/v1"])
+def test_url_credentials_are_rejected_without_echoing_them(url):
+    with pytest.raises(ValueError) as exc:
+        OpenAICompatibleVerifier(url, "m")
+    message = str(exc.value)
+    assert "pa55word" not in message and "tok3n-in-url" not in message and "api_key_env" in message
+
+
+def test_cli_rejects_a_credential_url_before_any_output(tmp_path, capsys):
+    fx = make_fixture(tmp_path / "fx")
+    cfg = yaml.safe_load(fx["config"].read_text(encoding="utf-8"))
+    cfg["vlm"].update(base_url="https://user:pa55word@vlm.example/v1", model="some-vl-model")
+    fx["config"].write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    args = ["shadow", "--config", str(fx["config"]), "--images", str(fx["manifest"]),
+            "--primary-predictions", str(fx["preds"]), "--primary-version", "prim@1", "--vlm",
+            "--out", str(tmp_path / "out")]
+    with pytest.raises(SystemExit) as exc:
+        cli.main(args)
+    captured = capsys.readouterr()
+    assert exc.value.code == 2 and "pa55word" not in captured.err + captured.out
+    assert not (tmp_path / "out").exists()
+
+
+TOKEN = "s3cret-token-XYZ"
+
+
+def _failing(mode):
+    def handler(request):
+        echoed = request.headers.get("authorization", "")  # a server that echoes the header back
+        if mode == "timeout":
+            raise httpx.ReadTimeout("slow", request=request)
+        if mode == "connect":
+            raise httpx.ConnectError("refused", request=request)
+        return httpx.Response(int(mode), text=f"rejected credentials: {echoed}")
+    return handler
+
+
+@pytest.mark.parametrize("mode", ["401", "500", "timeout", "connect"])
+def test_bearer_token_never_reaches_repr_or_the_persisted_result(monkeypatch, mode):
+    monkeypatch.setenv("VAD_TEST_VLM_KEY", TOKEN)
+    v = OpenAICompatibleVerifier("http://vlm.test/v1", "m", api_key_env="VAD_TEST_VLM_KEY",
+                                 transport=httpx.MockTransport(_failing(mode)))
+    result = v.verify(Image.new("RGB", (8, 8)), REQ, "x")
+    assert result.verdict == "uncertain"
+    assert TOKEN not in repr(v) and TOKEN not in result.model_dump_json()
+
+
+@pytest.mark.parametrize("mode", ["401", "500", "timeout", "connect"])
+def test_bearer_token_never_reaches_the_route_trace(tmp_path, monkeypatch, mode):
+    from routing.image_inputs import ManifestEntry
+    from routing.interfaces import RawDetection
+    from routing.pipeline import RoutingPipeline
+    from routing.store import RouteStore
+
+    from ..routing.helpers import CLASS_B, ScriptedDetector, ScriptedRelevance, draw
+
+    monkeypatch.setenv("VAD_TEST_VLM_KEY", TOKEN)
+    v = OpenAICompatibleVerifier("http://vlm.test/v1", "m", api_key_env="VAD_TEST_VLM_KEY",
+                                 transport=httpx.MockTransport(_failing(mode)))
+    entry = ManifestEntry(str(draw(tmp_path / "a.png", (320, 240), [])), image_id="a")
+    record = RoutingPipeline(config(vlm={"enabled": True}),
+                             ScriptedDetector({"a": [RawDetection(CLASS_A, (40, 40, 200, 200), 0.9)]}),
+                             RouteStore(tmp_path / "r.sqlite"), relevance=ScriptedRelevance({"a": {CLASS_A: 0.4, CLASS_B: 0.1}}),
+                             vlm=v).process(entry)
+    assert record.verifications and all(r.verdict == "uncertain" for r in record.verifications)
+    assert TOKEN not in record.model_dump_json()
 
 
 def test_no_authorization_header_without_api_key_env():

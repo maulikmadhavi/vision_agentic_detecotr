@@ -39,9 +39,9 @@ class OpenAICompatibleVerifier:
     ``json_schema`` request is not retried in another format). Any transport error,
     malformed or contradictory answer becomes ``uncertain``. ``api_key_env`` names an
     environment variable holding a bearer token; the token never enters repr, traces or
-    the recorded identity. The identity is ``openai-compatible:{model}@{host[:port]/path}``:
-    the same model name on two endpoints never shares cached results. URL credentials and
-    the scheme are left out.
+    the recorded identity; a ``base_url`` carrying credentials is rejected. The identity is
+    ``openai-compatible:{model}@{host[:port]/path}`` (no scheme): the same model name on two
+    endpoints never shares cached results.
     """
 
     base_url: str
@@ -54,6 +54,12 @@ class OpenAICompatibleVerifier:
     _headers: dict[str, str] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        # Credentials in the URL would reach repr, httpx error text and so persisted notes.
+        # The message never repeats them.
+        url = urlsplit(self.base_url)
+        if url.username is not None or url.password is not None:
+            raise ValueError("vlm.base_url must not contain credentials (user:password@ or token@); put the token "
+                             "in an environment variable and name that variable in vlm.api_key_env")
         if self.api_key_env:
             token = os.environ.get(self.api_key_env)
             if not token:
