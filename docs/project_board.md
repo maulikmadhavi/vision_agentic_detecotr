@@ -2,14 +2,14 @@
 
 **Updated:** 2026-11-09 · **Owner:** user · **Implementer:** Claude (Codex was blocked; see [reviewer_suggestion.md](reviewer_suggestion.md))
 
-This file merges what used to be three documents: the plan (`adaptive_object_detection_plan.md`), the Phase 0 integration map (`phase0_integration_map.md`) and the 2026-11-09 implementation notes (`implementation.md`). The reviewer's log stays separate in [reviewer_suggestion.md](reviewer_suggestion.md).
+This file merges the plan, the Phase 0 integration map and the implementation notes. The reviewer's log stays separate in [reviewer_suggestion.md](reviewer_suggestion.md).
 
 - **Part A — Board:** what is done, what is left, what needs a decision. Update this part as work lands.
 - **Part B — Spec:** the plan. It is the source of truth for requirements.
 - **Part C — Integration map:** greenfield defaults, hardware, fixture, assumptions.
-- **Part D — Implementation log:** dated rationale for what was built.
+- **Part D — How it works and why:** decision flow, behavior changes, design notes.
 
-**Snapshot:** phases 0–4 done, Phase 5 started, Phase 6 not started. Routing is disabled by default (`routing_enabled: false`). Tests: 91 default passed (re-run by the analysis agent after T-6); `-m clip` and `-m lmstudio` last passed at 1 each, not rerun since. R3-1…R3-5, R4-1 and T-6 are fixed. **Git:** 16 commits on `master` (head 6a31afd), tags `v0.1-phase4-baseline` (208713e) and `v0.2-r3-blockers-fixed` (0435d99); the backup branch `backup/pre-author-rewrite` holds the pre-rewrite history.
+**Snapshot:** phases 0–4 done, Phase 5 started, Phase 6 not started. Routing is disabled by default (`routing_enabled: false`). Tests: 92 default passed (re-run by the analysis agent after P2); `-m clip` and `-m lmstudio` last passed at 1 each, not rerun since. R3-1…R3-5, R4-1, T-6 and P2 are fixed. **Git:** 19 commits on `master` (head 76455b3), tags `v0.1-phase4-baseline` (208713e) and `v0.2-r3-blockers-fixed` (0435d99); the backup branch `backup/pre-author-rewrite` holds the pre-rewrite history.
 
 ---
 
@@ -84,16 +84,16 @@ This file merges what used to be three documents: the plan (`adaptive_object_det
 | F-13 | Resumable SQLite step cache; route persisted before expensive calls; error queue | 4 | `test_resume_after_crash_does_not_repeat_calls` |
 | F-14 | Budget caps (slices, VLM, elapsed, GPU) before each escalation | 4 | `test_slice_budget_blocks_sahi`, `test_elapsed_and_gpu_caps_stop_escalation` |
 | F-15 | Frozen-set hash lock + group isolation | 5 | `evaluation.py`, row 10 tests |
-| F-16 | Codex review rounds 1–2 fixed (SAHI parents, Stage A cache, VLM binding, explicit prediction rows, file digests) | — | [reviewer_suggestion.md](reviewer_suggestion.md) §5.5–5.6 |
+| F-16 | Codex review rounds 1–2 fixed (SAHI parents, Stage A cache, VLM binding, explicit prediction rows, file digests) | — | git history (commits before `f2dd581`) |
 | F-17 | H1: Codex prompt path fixed | — | Part B, Codex prompt |
-| F-18 | Poor-quality cut-offs moved to config (`quality:`) | 2 | D-log §1 |
-| F-19 | Open policy choices made config knobs, route-v1 defaults kept | 3 | D-log §2 |
-| F-20 | One writing job per output directory (OS lock; exit code 2) | 4 | D-log §3 |
-| F-21 | VLM "absent" sends to review by default (`vlm.absent_rejects`) — **behavior change** | 4 | D-log §4 |
-| F-22 | Moderate route without a second detector no longer auto-accepts primary boxes — **behavior change** | 4 | D-log §8 |
-| F-23 | `difficulty_uncalibrated` reason code; dead `sahi` extra removed; `clip` extra; GPU-time rule | — | D-log §5 |
-| F-24 | VLM-vs-human agreement scoring (one label set scores several VLMs) | 5 | D-log §6 |
-| F-25 | CLIP relevance scorer with scale guard and weights digest | 2/5 | D-log §7, `-m clip` |
+| F-18 | Poor-quality cut-offs moved to config (`quality:`) | 2 | Part D |
+| F-19 | Open policy choices made config knobs, route-v1 defaults kept | 3 | Part D |
+| F-20 | One writing job per output directory (OS lock; exit code 2) | 4 | Part D |
+| F-21 | VLM "absent" sends to review by default (`vlm.absent_rejects`) — **behavior change** | 4 | Part D |
+| F-22 | Moderate route without a second detector no longer auto-accepts primary boxes — **behavior change** | 4 | Part D |
+| F-23 | `difficulty_uncalibrated` reason code; dead `sahi` extra removed; `clip` extra; GPU-time rule | — | Part D |
+| F-24 | VLM-vs-human agreement scoring (one label set scores several VLMs) | 5 | Part D |
+| F-25 | CLIP relevance scorer with scale guard and weights digest | 2/5 | Part D, `-m clip` |
 | F-26 | R3-1: export and report use only the current run's records | 4 | f2dd581 |
 | F-27 | R3-2: cross-class conflicts stay in review even on VLM `absent` | 4 | cd33250 |
 | F-28 | R3-3: VLM calls are **at-most-once** on resume; an interrupted request becomes `uncertain`/review and is not re-sent — **behavior change** | 4 | f530f98 |
@@ -101,8 +101,9 @@ This file merges what used to be three documents: the plan (`adaptive_object_det
 | F-30 | R3-5: a bare human `complete` cannot clear open findings (open unmatched candidates, unresolved checks and escalation failures block it). Explicit per-finding human adjudication is still absent | 4 | 0435d99 |
 | F-31 | R4-1: calibrator output that omits a task class, or has `any_p` < P(class) − 1e-6, adds warning `calibrator_output_incomplete_or_inconsistent` and a low band becomes medium (status stays `calibrated`). Non-finite or out-of-range values already go to the error queue via the schema. 2 new tests | 2 | 770c9d3 |
 | F-32 | T-6 (user decided: unknown): with calibrated Stage A, a class with no calibrated probability is no longer judged by raw similarity vs `raw_high`. The completeness audit adds reason `calibrator_missing_class:<id>` and status `unresolved` (human review; no VLM verdict clears it). Uncalibrated runs unchanged. 2 new tests | 2/4 | 6a31afd |
+| F-33 | P2: for each calibrated class with no probability, `policy.route` adds `human_review`, reason `calibrator_missing_class:<id>` and priority ≥ 1; the audit lists the class in `suspected_missing_classes`. Works without a VLM. 1 new test | 3/4 | 76455b3 |
 
-Qualifications still open on earlier rows (reviewer §7): F-12 is now covered by F-30. F-13 resume guarantee is now at-most-once for the VLM (F-28). F-14 export mixing is fixed (F-26). **F-15 is utility-level only:** `vad-route shadow` does not accept a split or lock, so production runs do not enforce isolation. Replayed CLIP scores in JSONL carry no scale check (D-5).
+Qualifications still open on earlier rows (earlier review): F-12 is now covered by F-30. F-13 resume guarantee is now at-most-once for the VLM (F-28). F-14 export mixing is fixed (F-26). **F-15 is utility-level only:** `vad-route shadow` does not accept a split or lock, so production runs do not enforce isolation. Replayed CLIP scores in JSONL carry no scale check (D-5).
 
 ## Acceptance tests (spec table, with status)
 
@@ -124,7 +125,7 @@ Qualifications still open on earlier rows (reviewer §7): F-12 is now covered by
 
 ```bash
 uv venv -p 3.13 && uv pip install -e ".[dev]"            # add ",clip" for the CLIP scorer
-.venv/Scripts/python -m pytest                            # 91 tests, no network / GPU
+.venv/Scripts/python -m pytest                            # 92 tests, no network / GPU
 .venv/Scripts/python -m pytest -m clip                    # live CLIP (local weights)
 .venv/Scripts/python -m pytest -m lmstudio                # live VLM (LM Studio)
 vad-route shadow --config configs/routing/example.yaml --images manifest.jsonl \
@@ -310,63 +311,39 @@ The plan assumes an existing detector repository. None exists; this workspace he
 
 ---
 
-# Part D — Implementation log
+# Part D — How it works and why
 
-**2026-11-08:** phases 0–4 implemented, plus Codex review rounds 1–2. The full record, with checklist results and bug fixes, is in [reviewer_suggestion.md](reviewer_suggestion.md) §5.
+Dated history lives in `git log`; the reviewer's findings are in [reviewer_suggestion.md](reviewer_suggestion.md). This part keeps only what the code does and the reasons that are not obvious from it.
 
-**2026-11-09:** reviewer follow-ups. Each item below closes a card in Part A.
+## How a decision flows (as built)
 
-### §1 Poor-quality cut-offs to config (F-18)
-`policy.py` hard-coded `blur >= 0.8` and `exposure >= 0.5`. These now live in `quality.poor_blur` / `quality.poor_exposure` with the same defaults. They only drive poor-quality audit sampling.
+1. **Stage A** (`scoring.stage_a`): image validity, blur/exposure, per-class relevance. Relevance status is `calibrated`, `uncalibrated` or `unavailable`; a band is `low`, `medium`, `high` or `unknown`. A missing or incomplete class score never produces `low`.
+2. **Primary detector**, then **Stage B**: box features and difficulty. Zero boxes give difficulty `unknown`, never `easy`.
+3. **`policy.route`** (pure, ordered rules; same inputs give the same actions and reason codes):
+   - Low relevance and zero boxes: `standard` plus a hash-sampled audit. Nothing is discarded.
+   - High or unknown relevance and zero boxes, or high miss risk (hard, small box, crowding): escalate to `sahi`, `secondary`, `vlm_verify`, `human_review` as available.
+   - Moderate relevance or medium difficulty: `secondary`, then VLM or human. Without a secondary, VLM or human, never auto-accept.
+   - High relevance and low difficulty: `standard`.
+   - A calibrated class with no probability: `human_review`.
+   - Slice, VLM-call, elapsed or GPU caps stop escalation and leave `needs_review`.
+4. **Fuse and verify** (`matching`, `pipeline._verify`): class-aware fusion keeps every source ID. The VLM only answers `present`, `absent` or `uncertain`; it never creates or moves a box.
+5. **Completeness audit**: `complete` needs a human and nothing left open. Only `accepted` boxes are exported.
 
-### §2 Open policy choices as knobs (F-19, D-1…D-3)
-New `policy:` block. **The defaults reproduce route-v1 as shipped.**
-- `unknown_relevance_as: high`: zero boxes with unknown relevance escalate (priority 2) under reason `unknown_relevance_zero_boxes`, never `high_relevance_zero_boxes`. `low` is rejected by validation.
-- `moderate_without_secondary: human`: a human even when a VLM is configured.
-- `cross_class_always_review: false`: a VLM-confirmed primary box with a class conflict can be accepted.
+## Behavior changes to know about
 
-### §3 Job lock (F-20)
-`pipeline.job_lock(out_dir)` takes an exclusive OS byte-range lock on `<out>/.vad-route.lock` (`msvcrt` on Windows, `flock` elsewhere). `vad-route shadow` holds it for the whole run; a concurrent run on the same directory exits with code 2 before touching `routes.sqlite`.
-- An OS lock dies with its process, so there is no stale-lock cleanup.
-- PID probing is unsafe on Windows: `os.kill(pid, 0)` terminates the process.
-- The lock sits on the job, not inside `RouteStore`, because reopening a store in-process (resume, reports) is legitimate.
+| Change | Why | Knob / default |
+|---|---|---|
+| VLM `absent` sends a box to review instead of rejecting it (F-21) | The 4B model answers `absent` on blank crops. A wrongly rejected box silently leaves the export; a wrongly reviewed one only costs reviewer time. | `vlm.absent_rejects: false` |
+| A moderate route with no working secondary no longer auto-accepts primary boxes (F-22) | Boxes carry `secondary_unconfirmed` and go to the VLM or to review. | `policy.moderate_without_secondary` |
+| An interrupted VLM request becomes `uncertain` on resume and is not re-sent (F-28) | An attempt marker is written before the call, so no call repeats. The cost is a possibly lost answer. | none |
+| A calibrated class with no probability is unknown, not judged by raw similarity (F-32, P2) | Raw and calibrated scales must not mix. The class goes to `human_review` and the audit lists it. | none |
+| New config fields changed `config_hash` | Old `runs/*/routes.sqlite` caches are not reused. | none |
 
-### §4 VLM "absent" (F-21, D-4)
-`vlm.absent_rejects` defaults to `false`: an `absent` verdict now gives `needs_review` with flag `vlm_absent` instead of `rejected`.
-- Why: the 4B model answers `absent` on blank crops. A wrongly rejected primary box silently leaves the export; a wrongly reviewed one only costs reviewer time.
-- Export is unchanged, because only `accepted` boxes are exported.
-- `test_hard_route_without_extra_detector_verifies_primary_boxes` was changed on purpose and now covers both settings.
+## Design notes
 
-### §5 Labels, pins, GPU time (F-23, D-6)
-- The policy now emits `difficulty_uncalibrated` next to `relevance_<status>`.
-- `pydantic>=2.7,<3` (venv 2.14.3) is guarded by the schema drift test.
-- The `sahi` extra was removed because nothing imports SAHI. Add an exact pin if a SAHI bridge is ever written.
-- New `clip` extra: `open_clip_torch>=4.2,<5`, `torch>=2.11,<3`.
-- GPU cap rule: it is enforced only against adapter-measured device time; the elapsed cap covers wall time. `embedder.cuda_timer()` is a reusable CUDA-event timer for future torch adapters.
-
-### §6 VLM agreement (F-24, B-6)
-`evaluation.vlm_agreement(items, labels)` scores `(image_id, VerificationResult)` pairs (built by `verification_items(records)`) against `HumanLabel(image_id, class_id, candidate_ids, verdict, labeled_by)`, per model and purpose.
-- **Outputs:** a confusion table, the decided rate, accuracy on decided answers, and present/absent precision, each with a Wilson 95% lower bound.
-- **Label key:** labels are keyed by what was asked, not by the run-specific `request_id`, which hashes the VLM model and config. One label set therefore scores several VLMs over the same detections (`test_one_label_set_scores_two_vlm_models_from_real_runs`). A different detector produces different candidates and needs new labels.
-- **Refused labels:** labels authored by a scored model, and conflicting human labels.
-- **Limitation:** tested on synthetic data only so far.
-
-### §7 CLIP relevance scorer (F-25, D-5)
-`OpenClipRelevance(weights, arch="ViT-B-16-quickgelu")` loads a **local** checkpoint and never downloads. The HF cache has only `open_clip_model.safetensors`, with no `open_clip_config.json`, so it is loaded through open_clip's built-in QuickGELU config.
-- **Score (`clip_prompt_softmax_v1`):** for each class, `softmax(logit_scale · cos)` over the positive, negative and four background prompts; the score is the mass on the positives, in [0, 1]. Stored as `raw_similarity`, uncalibrated.
-- **Scale guard:** raw CLIP cosines sit around 0.22–0.34, so the placeholder bands (0.3/0.5) would push relevant images into the low band, and low band plus zero boxes ends in `standard`. A scorer that declares `score_scale` is refused unless `relevance.raw_scale` matches, and the CLI refuses `--clip-weights` without it. **The guard only covers the live scorer:** CLIP scores exported to JSONL and replayed via `--relevance-scores` are not checked.
-- **Provenance:** `artifact_digest` is the weights' SHA-256. `model_version` encodes the architecture, a digest prefix, the scale and a background-prompt hash.
-- **Measured:** load about 1.8 s; about 9 ms GPU per 320×240 image after warm-up. Blue square scores 0.9995 vs dog 0.032. A fixture shadow run with CLIP completed end to end.
-
-### §8 Same-model review of `pipeline.py` / `policy.py` (F-22, T-3)
-- **Fixed:** a moderate route with no secondary detector (or one that failed or was skipped by budget) auto-accepted primary boxes, and `vlm_verify` only checked missing classes. Such boxes now carry `secondary_unconfirmed` and go to the VLM or to review. Tests: `test_moderate_route_without_secondary_does_not_auto_accept_primary`, `test_moderate_route_with_failed_secondary_does_not_auto_accept`.
-- **Checked, no change:**
-  - `_verify` counts cached results toward the cap, which keeps the cap stable on resume.
-  - `_answers` binds results to request, class, candidates and region.
-  - `_apply` never creates or moves a box.
-  - Sampling uses `hashlib`.
-  - No discard action exists.
-- **Still open:** independent review (T-3).
-
-### Config hash note
-The new fields (`quality`, `policy`, `relevance.raw_scale`, `vlm.absent_rejects`) changed `config_hash` and therefore every record key. Existing `runs/*/routes.sqlite` caches are not reused; a new run recomputes. The committed JSON Schemas are unchanged.
+- **Policy knobs** (`policy:` block; defaults reproduce route-v1): `unknown_relevance_as` (`medium` or `high`), `moderate_without_secondary`, `cross_class_always_review`. Poor-quality cut-offs live in `quality.poor_blur` / `quality.poor_exposure`.
+- **Job lock:** `vad-route shadow` takes an exclusive OS byte-range lock on `<out>/.vad-route.lock`; a second run on the same directory exits with code 2. An OS lock dies with its process, so there is no stale-lock cleanup. PID probing is unsafe on Windows because `os.kill(pid, 0)` terminates the process.
+- **GPU cap** is enforced only against adapter-measured device time (`embedder.cuda_timer()`); the elapsed cap covers wall time.
+- **CLIP scorer** (`OpenClipRelevance`): loads a local checkpoint and never downloads. Score `clip_prompt_softmax_v1` is the softmax mass on a class's positive prompts, in [0, 1], stored as uncalibrated `raw_similarity`. Raw CLIP cosines sit around 0.22–0.34, so the placeholder bands (0.3/0.5) would mislabel relevant images as low. A scorer that declares a scale is refused unless `relevance.raw_scale` matches. **The guard covers only the live scorer;** scores replayed from JSONL are not checked. Load about 1.8 s, about 9 ms GPU per 320×240 image.
+- **VLM agreement** (`evaluation.vlm_agreement`): scores VLM answers against `HumanLabel`s, per model and purpose, with a confusion table and Wilson 95% lower bounds. Labels are keyed by what was asked, not by run-specific `request_id`, so one label set scores several VLMs over the same detections. Labels authored by a scored model, and conflicting labels, are refused. Tested on synthetic data only.
+- **Dependencies:** `pydantic>=2.7,<3` (guarded by the schema drift test); extra `clip` = `open_clip_torch>=4.2,<5`, `torch>=2.11,<3`. No SAHI extra exists because nothing imports SAHI.

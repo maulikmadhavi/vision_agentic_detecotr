@@ -33,7 +33,7 @@ vad-route legacy --config ... --images ... --primary-predictions ... --primary-v
 
 Shadow output: `routes.sqlite` (resumable step cache, records, error queue), `route_trace.jsonl`, `annotations.json`, `report.json`. A shadow run holds an exclusive lock on its `--out` directory; a second concurrent run on the same directory exits with code 2.
 
-**Live relevance (CLIP).** `--clip-weights` scores Stage A with a local open_clip checkpoint (`uv pip install -e ".[clip]"`). Its score is a prompt-contrast softmax in [0, 1] (`clip_prompt_softmax_v1`), not a cosine, so the config must set `relevance.raw_scale: clip_prompt_softmax_v1` and choose bands for that scale; otherwise the run is refused. See [docs/project_board.md](docs/project_board.md), Part D §7.
+**Live relevance (CLIP).** `--clip-weights` scores Stage A with a local open_clip checkpoint (`uv pip install -e ".[clip]"`). Its score is a prompt-contrast softmax in [0, 1] (`clip_prompt_softmax_v1`), not a cosine, so the config must set `relevance.raw_scale: clip_prompt_softmax_v1` and choose bands for that scale; otherwise the run is refused. See [docs/project_board.md](docs/project_board.md), Part D (CLIP scorer).
 
 `--vlm` uses LM Studio at `http://localhost:1234/v1` with `qwen3-vl-4b-instruct`. Change the model with `vlm.model` in the config.
 
