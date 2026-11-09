@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 import yaml
 
 from vad.routing import cli
@@ -186,3 +187,18 @@ def test_r4_1_inconsistent_aggregate_is_not_low_relevance(tmp_path):
     assert rec.stage_a.relevance_band == "medium"
     assert "calibrator_output_incomplete_or_inconsistent" in rec.stage_a.warnings
     assert "low_relevance_zero_boxes" not in rec.route.reason_codes
+
+
+# T-6: a class the calibrator omitted is unknown, never "not relevant", and never uses raw bands ---
+
+
+
+@pytest.mark.parametrize("raw_b", [0.9, 0.05])  # high and low raw score for the omitted class
+def test_t6_calibrator_missing_class_is_unknown_not_negative(tmp_path, raw_b):
+    rel = ScriptedRelevance({"a": {CLASS_A: 0.05, CLASS_B: raw_b}})
+    rec = RoutingPipeline(config(), ScriptedDetector({"a": []}), RouteStore(tmp_path / "r.sqlite"), relevance=rel,
+                          calibrator=_ScriptedCalibrator({CLASS_A: 0.01}, 0.02)).process(_entry(tmp_path))
+    assert rec.stage_a.relevance_band != "low" and "low_relevance_zero_boxes" not in rec.route.reason_codes
+    assert f"calibrator_missing_class:{CLASS_B}" in rec.completeness.reason_codes
+    assert CLASS_B not in rec.completeness.suspected_missing_classes  # raw score not compared to raw bands
+    assert rec.completeness.status == "unresolved"

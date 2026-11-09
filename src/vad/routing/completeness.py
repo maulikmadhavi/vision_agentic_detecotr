@@ -12,7 +12,7 @@ from collections.abc import Sequence
 
 from .matching import iou
 from .schemas import AnnotationAudit, FinalCandidate, RouteDecision, StageA, VerificationResult
-from .scoring import class_is_high_relevance
+from .scoring import calibrated_probability_missing, class_is_high_relevance
 from .task_config import RoutingConfig
 
 
@@ -63,6 +63,10 @@ def audit(
             unresolved = True
         else:
             reasons.append(f"vlm_absent_for_suspected_class:{cid}")
+    for cid in cfg.task.class_ids:
+        if cid not in accepted_classes and calibrated_probability_missing(sa, cid):
+            reasons.append(f"calibrator_missing_class:{cid}")
+            unresolved = True  # relevance unknown: never a negative, needs a human
     if any(c.verification is not None and c.verification.verdict == "uncertain" for c in candidates):
         reasons.append("verification_uncertain")
         unresolved = True

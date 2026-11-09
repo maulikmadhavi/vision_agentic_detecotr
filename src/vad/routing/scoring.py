@@ -87,12 +87,20 @@ def stage_a(
                   quality=quality, warnings=tuple(warnings))
 
 
+def calibrated_probability_missing(sa: StageA, class_id: str) -> bool:
+    """Calibrated Stage A without a probability for this class: a calibrator failure, relevance unknown."""
+    r = sa.per_class.get(class_id)
+    return sa.relevance_status == "calibrated" and (r is None or r.relevance_probability is None)
+
+
 def class_is_high_relevance(sa: StageA, class_id: str, cfg: RoutingConfig) -> bool:
     r = sa.per_class.get(class_id)
     if r is None:
         return False
     if r.relevance_probability is not None:
         return r.relevance_probability >= cfg.relevance.prob_high
+    if sa.relevance_status == "calibrated":
+        return False  # calibrator omitted it: unknown, handled via calibrated_probability_missing
     return r.raw_similarity is not None and r.raw_similarity >= cfg.relevance.raw_high
 
 
