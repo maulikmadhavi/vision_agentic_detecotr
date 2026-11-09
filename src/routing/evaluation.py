@@ -45,6 +45,16 @@ def assert_not_frozen(image_groups: Mapping[str, str], lock: Mapping, image_ids:
         raise IsolationError(f"frozen-evaluation images used outside evaluation: {leaked[:5]}")
 
 
+def assert_not_frozen_in_split(split_manifest: Mapping, image_ids: Sequence[str]) -> None:
+    """Refuse any image the split manifest freezes, by id or by frozen_eval group; unknown ids pass."""
+    images = split_manifest["images"]
+    frozen_ids = [i for i, v in images.items() if v["split"] == "frozen_eval"]
+    frozen_groups = ({images[i].get("group_id") for i in frozen_ids}
+                     | {g for g, v in split_manifest.get("groups", {}).items() if v["split"] == "frozen_eval"})
+    assert_not_frozen({i: v.get("group_id") for i, v in images.items()},
+                      {"group_ids": sorted(g for g in frozen_groups if g), "image_ids": frozen_ids}, image_ids)
+
+
 def assert_split_allows(split_manifest: Mapping, image_ids: Sequence[str],
                         allowed_splits: Sequence[str] | None = None) -> None:
     """Guard for fitting, threshold selection and prompt choice over a split manifest (``sample.make_split``).
@@ -55,11 +65,7 @@ def assert_split_allows(split_manifest: Mapping, image_ids: Sequence[str],
     images = split_manifest["images"]
     if unknown := sorted(i for i in image_ids if i not in images):
         raise IsolationError(f"images not in the split manifest: {unknown[:5]}")
-    frozen_ids = [i for i, v in images.items() if v["split"] == "frozen_eval"]
-    frozen_groups = ({images[i].get("group_id") for i in frozen_ids}
-                     | {g for g, v in split_manifest.get("groups", {}).items() if v["split"] == "frozen_eval"})
-    assert_not_frozen({i: v.get("group_id") for i, v in images.items()},
-                      {"group_ids": sorted(g for g in frozen_groups if g), "image_ids": frozen_ids}, image_ids)
+    assert_not_frozen_in_split(split_manifest, image_ids)
     if allowed_splits is not None:
         if outside := sorted(i for i in image_ids if images[i]["split"] not in allowed_splits):
             raise IsolationError(f"images outside {list(allowed_splits)}: "

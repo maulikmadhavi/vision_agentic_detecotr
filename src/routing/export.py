@@ -11,6 +11,7 @@ import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from .evaluation import IsolationError, assert_not_frozen_in_split
 from .schemas import Detection, ReviewedRecord, RouteRecord, TaskSpec, stable_id
 
 
@@ -87,9 +88,18 @@ def _write(task: TaskSpec, images, anns, out, info: dict) -> dict:
     return doc
 
 
-def load_annotations(path: str | Path) -> dict:
-    """Minimal loader standing in for the (not yet existing) training pipeline's dataset reader."""
+def load_annotations(path: str | Path, split_manifest: Mapping | None = None) -> dict:
+    """Minimal loader standing in for the (not yet existing) training pipeline's dataset reader.
+
+    Frozen evaluation images never reach training: images tagged ``vad_split: frozen_eval`` are
+    refused, and with ``split_manifest`` so are untagged images the manifest freezes (by id or by
+    group). An untagged export read without a manifest cannot be checked; pass the manifest.
+    """
     doc = json.loads(Path(path).read_text(encoding="utf-8"))
+    if frozen := sorted(i["vad_image_id"] for i in doc["images"] if i.get("vad_split") == "frozen_eval"):
+        raise IsolationError(f"frozen_eval images must not be used for training: {frozen[:5]}")
+    if split_manifest is not None:
+        assert_not_frozen_in_split(split_manifest, [i["vad_image_id"] for i in doc["images"]])
     cats = {c["id"]: c["name"] for c in doc["categories"]}
     for a in doc["annotations"]:
         x, y, w, h = a["bbox"]

@@ -151,3 +151,47 @@ def test_fitting_guard_rejects_any_image_of_a_frozen_group(tmp_path):
                                                                           "split": "calibration"}}}
     with pytest.raises(IsolationError, match="frozen"):
         assert_split_allows(sneaky, ["late-copy"])
+
+
+# --- A7 stage 3: the training-side reader refuses frozen images ---------------------------------
+
+
+def _export(tmp_path, splits):
+    from routing.export import export_routed
+    fx = make_fixture(tmp_path / "fx")
+    assert cli.main(["shadow", "--config", str(fx["config"]), "--images", str(fx["manifest"]),
+                     "--primary-predictions", str(fx["preds"]), "--primary-version", "prim@1",
+                     "--out", str(tmp_path / "run")]) == 0
+    from routing.schemas import RouteRecord
+    lines = (tmp_path / "run" / "route_trace.jsonl").read_text(encoding="utf-8").splitlines()
+    records = [RouteRecord.model_validate_json(line) for line in lines]
+    path = tmp_path / "annotations.json"
+    export_routed(records, records[0].task, path, splits)
+    return path
+
+
+def test_training_reader_refuses_images_tagged_frozen(tmp_path):
+    from routing.export import load_annotations
+    path = _export(tmp_path, {"easy": "calibration", "zero": "development", "small": "frozen_eval"})
+    with pytest.raises(IsolationError, match="small"):
+        load_annotations(path)
+
+
+def test_training_reader_accepts_tuning_tags_and_untagged_exports(tmp_path):
+    from routing.export import load_annotations
+    assert load_annotations(_export(tmp_path / "t", {"easy": "calibration", "zero": "development",
+                                                     "small": "calibration"}))
+    assert load_annotations(_export(tmp_path / "u", None))
+
+
+def test_training_reader_with_a_split_manifest_refuses_untagged_frozen_images(tmp_path):
+    from routing.export import load_annotations
+    path = _export(tmp_path, None)  # exported without --split-manifest: no tags
+    manifest = {"version": "split-v1", "groups": {"g-s": {"split": "frozen_eval"}},
+                "images": {"easy": {"group_id": "g-e", "split": "calibration"},
+                           "small": {"group_id": "g-s", "split": "frozen_eval"}}}
+    with pytest.raises(IsolationError, match="small"):
+        load_annotations(path, split_manifest=manifest)
+    late = {**manifest, "images": {"easy": {"group_id": "g-s", "split": "calibration"}}}  # a frozen group's copy
+    with pytest.raises(IsolationError, match="easy"):
+        load_annotations(path, split_manifest=late)
