@@ -2,7 +2,7 @@
 
 **Updated:** 2026-11-09 · **Owner:** user · **Implementer:** Claude · **Review log:** [reviewer_suggestion.md](reviewer_suggestion.md)
 
-**Status:** phases 0–4 done, Phase 5 started, Phase 6 not started. Routing is off by default (`routing_enabled: false`). `pixi run test`: 152 passed, 1 skipped (server test needs fastapi; it runs in the service env) (re-run by the analysis agent); live `test-clip`, `test-lmstudio`, `test-gdino`, `test-wemm`: 1 passed each (reported by main_agent, synthetic images only). Environments: pixi only. Git: tags `v0.1-phase4-baseline` (208713e) and `v0.2-r3-blockers-fixed` (0435d99); `backup/pre-author-rewrite` holds the pre-rewrite history.
+**Status:** phases 0–4 done, Phase 5 started, Phase 6 not started. Routing is off by default (`routing_enabled: false`). `pixi run test`: 168 passed, 0 skipped, 1 warning (starlette testclient deprecation; harmless) (re-run by the analysis agent); the Grounding DINO server tests now run in the default suite (fastapi in the dev extra); live `test-clip`, `test-lmstudio`, `test-gdino`, `test-wemm`: 1 passed each (reported by main_agent, synthetic images only). Environments: pixi only. Git: tags `v0.1-phase4-baseline` (208713e) and `v0.2-r3-blockers-fixed` (0435d99); `backup/pre-author-rewrite` holds the pre-rewrite history.
 
 The requirements and acceptance criteria are in [specification.md](specification.md); this board tracks their status only.
 
@@ -200,7 +200,7 @@ There was no existing detector repository, so each interface is a neutral defaul
 
 ```bash
 pixi install                    # add `-e clip` for the CLIP scorer
-pixi run test                   # 152 tests, no network / GPU
+pixi run test                   # 168 tests, no network / GPU
 pixi run -e clip test-clip      # live CLIP (local weights)
 pixi run test-lmstudio          # live VLM (LM Studio)
 pixi run vad-route shadow --config configs/routing/example.yaml --images manifest.jsonl \
