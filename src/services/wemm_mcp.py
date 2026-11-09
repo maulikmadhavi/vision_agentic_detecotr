@@ -26,8 +26,8 @@ class WeMMMCPRelevanceScorer:
 
     Implements the existing ``RelevanceScorer`` protocol. One JSON-RPC POST per image
     with all classes' positive prompts; per-class raw score = max cosine over that
-    class's prompts (scale ``wemm_text_cosine_v1``, not a probability, not comparable
-    with CLIP). Images are downscaled so the longest side is at most ``max_side``;
+    class's prompts (scale ``wemm_text_cosine_v1``, not a probability).
+    Images are downscaled so the longest side is at most ``max_side``;
     that setting is part of ``model_version``. Retries once on a network error only.
     ``isError``, JSON-RPC errors, malformed results and ``meta`` mismatches raise
     :class:`RemoteScorerError`; they never become a score. Without a server-reported

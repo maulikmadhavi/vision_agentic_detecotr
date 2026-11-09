@@ -2027,15 +2027,13 @@ packages:
 - pypi: ../../..
   name: vad
   version: 0.1.0
-  sha256: 3fd3d821db18e60838fbd1d5acee153fb6a9047b219ca3d27b0bc78021d9d198
+  sha256: d2ffd3de9c0b2a7b2def88c46da2763597ace31c6285192b1e067c65c8208e7a
   requires_dist:
   - pydantic>=2.7,<3
   - numpy>=1.26
   - pillow>=10
   - pyyaml>=6
   - httpx>=0.27
-  - open-clip-torch>=4.2,<5 ; extra == 'clip'
-  - torch>=2.11,<3 ; extra == 'clip'
   - pytest>=8 ; extra == 'dev'
   - fastapi>=0.115 ; extra == 'dev'
   requires_python: '>=3.11'

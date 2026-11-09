@@ -170,17 +170,29 @@ def test_cli_shadow_refuses_a_locked_output_dir(tmp_path, capsys):
     assert cli.main(args) == 0
 
 
-# --- CLIP scorer scale guard (no torch needed) ---------------------------------------------------
+@pytest.mark.parametrize("flag", [["--clip-weights", "w.safetensors"], ["--clip-arch", "ViT-B-16"]])
+def test_removed_clip_flags_fail_clearly(tmp_path, capsys, flag):
+    fx = make_fixture(tmp_path / "fx")
+    args = ["shadow", "--config", str(fx["config"]), "--images", str(fx["manifest"]),
+            "--primary-predictions", str(fx["preds"]), "--primary-version", "prim@1",
+            "--out", str(tmp_path / "out"), *flag]
+    with pytest.raises(SystemExit) as exc:
+        cli.main(args)
+    assert exc.value.code == 2 and f"unrecognized arguments: {' '.join(flag)}" in capsys.readouterr().err
+    assert not (tmp_path / "out").exists()
+
+
+# --- scorer scale guard ------------------------------------------------------------------------
 
 
 def test_scorer_with_declared_scale_requires_matching_config(tmp_path):
     class ScaledRelevance(ScriptedRelevance):
-        score_scale = "clip_prompt_softmax_v1"
+        score_scale = "test_scale_v1"
 
     rel = ScaledRelevance({"a": {CLASS_A: 0.9, CLASS_B: 0.1}})
     with pytest.raises(ValueError, match="raw_scale"):
         RoutingPipeline(config(), ScriptedDetector({"a": []}), RouteStore(":memory:"), relevance=rel)
-    cfg = config(relevance={"raw_scale": "clip_prompt_softmax_v1", "raw_high": 0.6, "raw_low": 0.2})
+    cfg = config(relevance={"raw_scale": "test_scale_v1", "raw_high": 0.6, "raw_low": 0.2})
     rec = RoutingPipeline(cfg, ScriptedDetector({"a": []}), RouteStore(":memory:"),
                           relevance=rel).process(_entry(tmp_path))
     assert rec.stage_a.relevance_band == "high"
@@ -191,8 +203,7 @@ def test_scorer_with_declared_scale_requires_matching_config(tmp_path):
 def test_core_package_imports_without_torch():
     import subprocess
     import sys
-    code = ("import sys; sys.modules['torch'] = None; sys.modules['open_clip'] = None; "
-            "import routing.cli, routing.pipeline, services.open_clip")
+    code = "import sys; sys.modules['torch'] = None; import routing.cli, routing.pipeline, services.runtime"
     assert subprocess.run([sys.executable, "-c", code]).returncode == 0
 
 

@@ -24,7 +24,6 @@ curl -fsSL https://pixi.sh/install.sh | sh
 
 ```bash
 pixi install            # default env: Python 3.13 + package (editable) + pytest
-pixi install -e clip    # CLIP scorer env: not used for now (kept, opt-in via --clip-weights)
 pixi shell              # optional: activate the default env
 ```
 
@@ -66,9 +65,7 @@ pixi run vad-route shadow --config configs/routing/example.yaml --images path\to
 
 Shadow output: `routes.sqlite` (resumable step cache, records, error queue), `route_trace.jsonl`, `annotations.json`, `report.json`. A shadow run holds an exclusive lock on its `--out` directory; a second concurrent run on the same directory exits with code 2.
 
-**Relevance (WeMM).** `--wemm` scores Stage A on the WeMM embedding server. Its endpoint is read only from `$VAD_WEMM_URL` (never put it in config or git). The score is the max text–image cosine over each class's positive prompts (scale `wemm_text_cosine_v1`; not a probability, not comparable with CLIP), so the config must set `relevance.raw_scale: wemm_text_cosine_v1` with bands chosen for that scale, or the run is refused. Images are downscaled so the longest side is at most 448 px (`--wemm-max-side`) before sending. If the server fails for an image, its relevance is `unavailable` (never a score of 0), it goes to review, and the run prints a stderr warning with the failure count. The model is recorded as `@unverified` until you pass `--wemm-build <sha>`, which is then checked on every response.
-
-**Relevance (CLIP): not used for now (kept, opt-in via `--clip-weights`).** Local open_clip scoring (`pixi install -e clip`, then `pixi run -e clip vad-route shadow ... --clip-weights <file>`), scale `clip_prompt_softmax_v1`. See [docs/project_board.md](docs/project_board.md), "How it works and why".
+**Relevance (WeMM).** `--wemm` scores Stage A on the WeMM embedding server. Its endpoint is read only from `$VAD_WEMM_URL` (never put it in config or git). The score is the max text–image cosine over each class's positive prompts (scale `wemm_text_cosine_v1`; not a probability), so the config must set `relevance.raw_scale: wemm_text_cosine_v1` with bands chosen for that scale, or the run is refused. Images are downscaled so the longest side is at most 448 px (`--wemm-max-side`) before sending. If the server fails for an image, its relevance is `unavailable` (never a score of 0), it goes to review, and the run prints a stderr warning with the failure count. The model is recorded as `@unverified` until you pass `--wemm-build <sha>`, which is then checked on every response.
 
 `--vlm` uses LM Studio at `http://localhost:1234/v1` with `qwen3-vl-4b-instruct`. Change the model with `vlm.model` in the config.
 
@@ -80,27 +77,23 @@ pixi run test-lmstudio        # live check against local LM Studio (-rs: lists s
 pixi run test-wemm            # live WeMM scorer, synthetic image (needs $VAD_WEMM_URL; skips without it)
 pixi run test-gdino           # live Grounding DINO server (start it first; see its README.md)
 pixi run test-e2e             # one shadow run with all three services + one outage case per service (synthetic images)
-pixi run -e clip test-clip    # live CLIP scorer: not used for now (kept)
-pixi run -e clip gpu-check    # torch version, CUDA available, device names (clip env)
 ```
 
 ## Live prerequisites (not in the lockfile)
 
-The live tests and `--wemm` / `--vlm` (and the unused `--clip-weights`) need assets that pixi does not install:
+The live tests and `--wemm` / `--vlm` need assets that pixi does not install:
 
 | Asset | Expected | How it is found |
 |---|---|---|
 | WeMM embedding server | MCP streamable-http server reporting `meta.backend=wemm`, `meta.model=tencent/WeMM-Embedding-4B`, `meta.dim=2560` | `$VAD_WEMM_URL` (set it in your shell or an untracked, gitignored file; never commit the address) |
-| CLIP checkpoint (not used for now) | Hugging Face `timm/vit_base_patch16_clip_224.openai`, file `open_clip_model.safetensors` (598,516,980 bytes, SHA-256 `4b8699299b1e8997753c64b052ba32031449d5d853f55a039148560ee02b820f`) | `VAD_CLIP_WEIGHTS` if set, else the Hugging Face cache. Never downloaded by this repo. |
 | LM Studio | OpenAI-compatible server at `http://localhost:1234/v1` with model ID `qwen3-vl-4b-instruct` loaded | `vlm.base_url` / `vlm.model` in the config |
-| GPU (optional) | CUDA-capable NVIDIA GPU for the `clip` env (CUDA 12.8 torch) | `pixi run -e clip gpu-check` |
+| GPU | CUDA-capable NVIDIA GPU for the Grounding DINO server (CUDA 12.8 torch in its own pixi workspace) | see `src/services/grounding_dino/README.md` |
 
 ```powershell
 $env:VAD_WEMM_URL = "<your WeMM MCP endpoint>"                       # PowerShell
-$env:VAD_CLIP_WEIGHTS = "C:\path\to\open_clip_model.safetensors"   # CLIP, not used for now
 ```
 
-**Recording live results.** The live tasks **skip** (they do not fail) when their service is unreachable: `test-wemm` without `$VAD_WEMM_URL` or when the server cannot be reached, `test-gdino` when the server is not running, `test-lmstudio` when LM Studio is down or does not list the model, `test-e2e` when any of the three is unreachable, and `test-clip` when no weights are found. A zero exit code alone therefore does not prove a service ran. Record the passed and skipped counts that pytest prints (the tasks pass `-rs`, so the skip reason is listed), plus the pixi environment.
+**Recording live results.** The live tasks **skip** (they do not fail) when their service is unreachable: `test-wemm` without `$VAD_WEMM_URL` or when the server cannot be reached, `test-gdino` when the server is not running, `test-lmstudio` when LM Studio is down or does not list the model, and `test-e2e` when any of the three is unreachable. A zero exit code alone therefore does not prove a service ran. Record the passed and skipped counts that pytest prints (the tasks pass `-rs`, so the skip reason is listed), plus the pixi environment.
 
 ## Layout
 
@@ -128,7 +121,6 @@ src/services/       package `services`: model-service clients and servers
   wemm_mcp.py       WeMMMCPRelevanceScorer (WeMM MCP relevance client)
   lmstudio.py       LMStudioVerifier (VLM verifier client)
   replay.py         precomputed detections / relevance from JSONL
-  open_clip.py      OpenClipRelevanceScorer (not used for now)
   runtime.py        file hashing + measured GPU time helpers
   grounding_dino/       Grounding DINO server; own pixi workspace (see its README.md)
 tests/routing/, tests/services/

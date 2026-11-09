@@ -53,8 +53,6 @@ misassign boxes. Per-class passes make attribution exact, at the cost of N passe
 | Peak torch VRAM in the server | 1,757 MiB |
 | Total GPU memory in use, with LM Studio `qwen3-vl-4b-instruct` loaded | 9,590 MiB of 12,227 MiB (7,204 MiB before the server started) |
 
-The CLIP scorer was not loaded at the same time; expect roughly another 0.6–1 GB.
-
 ### Known false positives (synthetic images)
 
 Grounding DINO boxes *something* for every prompt. Measured with `smoke`:

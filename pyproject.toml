@@ -14,9 +14,6 @@ dependencies = [
 [project.optional-dependencies]
 # Slicing is native (src/routing/slicing.py); nothing imports the SAHI package, so
 # there is no SAHI extra to pin. Add one with an exact pin if a SAHI bridge is written.
-# Live Stage A relevance (services.open_clip.OpenClipRelevanceScorer). The pixi `clip` environment pulls
-# torch from the CUDA 12.8 index (see [tool.pixi.feature.clip]).
-clip = ["open_clip_torch>=4.2,<5", "torch>=2.11,<3"]
 dev = ["pytest>=8", "fastapi>=0.115"]  # fastapi: Grounding DINO server fake-model tests (no torch)
 
 [project.scripts]
@@ -33,15 +30,14 @@ packages = ["src/routing", "src/services"]
 testpaths = ["tests"]
 markers = [
     "lmstudio: requires a running LM Studio server with a vision model",
-    "clip: requires open_clip + torch and local CLIP weights (VAD_CLIP_WEIGHTS or the HF cache)",
     "gdino: requires the local Grounding DINO server (src/services/grounding_dino)",
     "wemm: requires the WeMM embedding server at $VAD_WEMM_URL",
     "e2e: requires all three live services at once (Grounding DINO, WeMM, LM Studio)",
 ]
-addopts = "-m 'not lmstudio and not clip and not gdino and not wemm and not e2e'"
+addopts = "-m 'not lmstudio and not gdino and not wemm and not e2e'"
 
 # --------------------------------------------------------------------------- pixi
-# Environment manager for this repo (no venv/uv/conda). `pixi run test`, `pixi run -e clip test-clip`.
+# Environment manager for this repo (no venv/uv/conda). `pixi run test`.
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]
@@ -53,12 +49,8 @@ python = "3.13.*"
 [tool.pixi.pypi-dependencies]
 vad = { path = ".", editable = true }
 
-[tool.pixi.feature.clip.pypi-dependencies]
-torch = { version = ">=2.11,<3", index = "https://download.pytorch.org/whl/cu128" }
-
 [tool.pixi.environments]
 default = { features = ["dev"], solve-group = "default" }
-clip = { features = ["dev", "clip"], solve-group = "clip" }
 
 [tool.pixi.tasks]
 test = "pytest"
@@ -67,7 +59,3 @@ test-gdino = "pytest -m gdino -rs"
 test-wemm = "pytest -m wemm -rs"
 test-e2e = "pytest -m e2e -rs"
 export-schema = "vad-route export-schema --out schemas"
-
-[tool.pixi.feature.clip.tasks]
-test-clip = "pytest -m clip -rs"
-gpu-check = "python -c 'import torch; print(torch.__version__, torch.cuda.is_available(), [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())])'"

@@ -55,15 +55,12 @@ def _parser() -> argparse.ArgumentParser:
             p.add_argument("--secondary-version", help="model identifier only (not verified); the file's SHA-256 is bound into the run key separately")
             rel = p.add_mutually_exclusive_group()
             rel.add_argument("--relevance-scores")
-            rel.add_argument("--clip-weights", help="local open_clip weights file for live Stage A relevance "
-                                                    "(needs the [clip] extra and relevance.raw_scale: clip_prompt_softmax_v1)")
             rel.add_argument("--wemm", action="store_true", help="Stage A relevance from the WeMM embedding server at "
                                                                  "$VAD_WEMM_URL (needs relevance.raw_scale: wemm_text_cosine_v1)")
             p.add_argument("--wemm-model", default="tencent/WeMM-Embedding-4B", help="expected meta.model (verified)")
             p.add_argument("--wemm-dim", type=int, default=2560, help="expected meta.dim (verified)")
             p.add_argument("--wemm-build", help="expected meta.build; without it the version is recorded as unverified")
             p.add_argument("--wemm-max-side", type=int, default=448, help="downscale longest image side before sending")
-            p.add_argument("--clip-arch", default="ViT-B-16-quickgelu", help="open_clip architecture for --clip-weights")
             p.add_argument("--relevance-version", default="precomputed", help="scorer identifier only (not verified); the file's SHA-256 is bound into the run key separately")
             p.add_argument("--vlm", action="store_true", help="enable LM Studio verification (overrides config)")
     return ap
@@ -119,11 +116,6 @@ def main(argv: list[str] | None = None) -> int:
     secondary = (PrecomputedDetector(args.secondary_predictions, args.secondary_version)
                  if args.secondary_predictions else None)
     relevance = PrecomputedRelevance(args.relevance_scores, args.relevance_version) if args.relevance_scores else None
-    if args.clip_weights:
-        from services.open_clip import OpenClipRelevanceScorer, SCORE_SCALE
-        if cfg.relevance.raw_scale != SCORE_SCALE:
-            parser.error(f"--clip-weights needs relevance.raw_scale: {SCORE_SCALE} (with bands chosen for that scale)")
-        relevance = OpenClipRelevanceScorer(args.clip_weights, args.clip_arch)
     if args.wemm:
         url = os.environ.get("VAD_WEMM_URL")
         if not url:
