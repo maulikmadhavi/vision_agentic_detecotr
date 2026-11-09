@@ -35,6 +35,12 @@ def scores_payload(scores, meta=META):
             "meta": meta}
 
 
+def _rows(rows, meta=META):
+    """Raw reply with explicit result rows of (index, score) matches, for malformed-response tests."""
+    return {"results": [{"matches": [{"index": i, "label": f"t{i}", "score": s} for i, s in row]} for row in rows],
+            "meta": meta}
+
+
 def server(reply, calls):
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
@@ -99,6 +105,10 @@ FAILURES = {
     "malformed-text": lambda b, n: {"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "text", "text": "{"}]}},
     "missing-index": lambda b, n: rpc_result({"results": [{"matches": [{"index": 0, "label": "t", "score": 0.2}]}],
                                               "meta": META}),
+    "duplicate-index": lambda b, n: rpc_result(_rows([[(0, 0.1), (1, 0.9), (1, 0.2), (2, 0.1)]])),
+    "extra-row": lambda b, n: rpc_result(_rows([[(0, 0.1), (1, 0.2), (2, 0.3)], [(0, 0.9), (1, 0.9), (2, 0.9)]])),
+    "zero-rows": lambda b, n: rpc_result(_rows([])),
+    "index-out-of-range": lambda b, n: rpc_result(_rows([[(0, 0.1), (1, 0.2), (2, 0.3), (3, 0.4)]])),
     "mock-backend": lambda b, n: rpc_result(scores_payload([0.1, 0.1, 0.1], {**META, "backend": "mock"})),
     "wrong-model": lambda b, n: rpc_result(scores_payload([0.1, 0.1, 0.1], {**META, "model": "other"})),
     "wrong-dim": lambda b, n: rpc_result(scores_payload([0.1, 0.1, 0.1], {**META, "dim": 1024})),
@@ -113,6 +123,11 @@ def test_failures_raise(name):
     with pytest.raises(RemoteScorerError):
         s.score(_img(), "i", PROMPTS)
     assert len(calls) == (2 if name == "network-twice" else 1)  # retry once, only on a network error
+
+
+def test_positive_control_a_valid_reply_with_unordered_matches_and_a_real_zero_is_accepted():
+    s, _ = scorer(lambda b, n: rpc_result(_rows([[(2, 0.0), (0, 0.0), (1, 0.25)]])))
+    assert s.score(_img(), "i", PROMPTS) == {CLASS_A: 0.25, CLASS_B: 0.0}
 
 
 def test_one_network_error_is_retried_once():

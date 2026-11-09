@@ -103,11 +103,14 @@ class WeMMMCPRelevanceScorer:
         payload = self._call("compute_similarity", {"left": [self._data_uri(image)], "right": texts,
                                                     "mode": "matrix", "metric": "cosine", "top_k": len(texts)})
         try:
-            by_index = {int(m["index"]): float(m["score"]) for m in payload["results"][0]["matches"]}
+            (row,) = payload["results"]  # exactly one image was sent, so exactly one result row
+            pairs = [(int(m["index"]), float(m["score"])) for m in row["matches"]]
         except (KeyError, IndexError, TypeError, ValueError) as e:
             raise RemoteScorerError(f"malformed matches: {type(e).__name__}") from e
-        if set(by_index) != set(range(len(texts))) or not all(math.isfinite(v) for v in by_index.values()):
-            raise RemoteScorerError(f"expected finite scores for indices 0..{len(texts) - 1}")
+        by_index = dict(pairs)
+        if (len(pairs) != len(by_index) or set(by_index) != set(range(len(texts)))
+                or not all(math.isfinite(v) for v in by_index.values())):
+            raise RemoteScorerError(f"expected one finite score per index 0..{len(texts) - 1}")
         out: dict[str, float] = {}
         for i, class_id in enumerate(owners):
             out[class_id] = max(out.get(class_id, -math.inf), by_index[i])
