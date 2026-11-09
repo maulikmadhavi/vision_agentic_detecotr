@@ -25,7 +25,7 @@ import numpy as np
 from PIL import Image, ImageOps
 
 from .image_inputs import ManifestEntry, load_image
-from .metrics import load_ground_truth
+from .metrics import GroundTruthBox, GroundTruthImage, Prediction, load_ground_truth, match_image
 from .schemas import TaskSpec, canonical_json, stable_id
 
 REVIEW_MARGIN = 4
@@ -279,3 +279,147 @@ def make_split(groups_doc: Mapping, exclusions_doc: Mapping, label_doc: Mapping,
     }
     frozen_ids = [i for i, img in images.items() if img["split"] == "frozen_eval"]
     return manifest, frozen_label_subset(label_doc, frozen_ids)
+
+
+# --------------------------------------------------------------------------- second review
+
+SECOND_REVIEW_FRACTION = 0.2  # of the groups that are not already queued as ambiguous
+_MODEL_TOKENS = ("vlm", "gpt", "qwen", "llama", "claude", "gemini", "mistral", "dino", "wemm", "clip", "model",
+                 "detector", "openai", "lmstudio")
+
+
+class UnresolvedReviews(SampleError):
+    """Reviewers disagree on some images and no adjudication says whose labels to use."""
+
+    def __init__(self, disagreements: list[dict]):
+        self.disagreements = disagreements
+        ids = [d["image_id"] for d in disagreements if d["decision"] is None]
+        super().__init__(f"{len(ids)} disagreements need an adjudication (first or second): {ids[:10]}")
+
+
+def _check_handle(handle: object, role: str) -> str:
+    """A reviewer is a free-text human handle; model-like ids are refused (a guard, not authentication)."""
+    text = handle.strip() if isinstance(handle, str) else ""
+    lowered = text.lower()
+    if not text or any(ch in text for ch in ":@/") or any(token in lowered for token in _MODEL_TOKENS):
+        raise SampleError(f"{role} reviewer handle {handle!r} is empty or looks like a model id; use a person's handle")
+    return text
+
+
+def _label_digest(label_doc: Mapping) -> str:
+    """Order-independent content digest of a label file (images sorted by vad_image_id)."""
+    ids = [img["vad_image_id"] for img in label_doc["images"]]
+    return _digest({"provenance": label_doc.get("vad_label_provenance"), **frozen_label_subset(label_doc, ids)})
+
+
+def review_queue(label_doc: Mapping, groups_doc: Mapping, task: TaskSpec, seed: int,
+                 fraction: float = SECOND_REVIEW_FRACTION) -> dict:
+    """Images for an independent second review: every ambiguous image plus a seeded share of the other groups."""
+    ground_truth = load_ground_truth(label_doc, task)
+    group_of = {i: v["group_id"] for i, v in groups_doc["images"].items()}
+    if ungrouped := sorted(set(ground_truth) - set(group_of)):
+        raise SampleError(f"labelled images that are not in the groups file: {ungrouped[:5]}")
+    for image_id, gt in ground_truth.items():
+        if len(gt.reviewers) != 1:
+            raise SampleError(f"image {image_id!r} needs exactly one first reviewer in vad_reviewers")
+        _check_handle(gt.reviewers[0], "first")
+    ambiguous = sorted(i for i, gt in ground_truth.items() if gt.ambiguous)
+    rest: dict[str, list[str]] = {}
+    for image_id in sorted(set(ground_truth) - set(ambiguous)):
+        rest.setdefault(group_of[image_id], []).append(image_id)
+    ordered = sorted(rest, key=lambda g: hashlib.sha256(f"{seed}|{g}".encode()).hexdigest())
+    sampled = ordered[:_round(fraction * len(ordered))]
+    queued = [{"image_id": i, "group_id": group_of[i], "reason": "ambiguous"} for i in ambiguous]
+    queued += [{"image_id": i, "group_id": g, "reason": "sample"} for g in sampled for i in rest[g]]
+    return {"version": "review-queue-v1", "seed": seed, "sample_fraction": fraction,
+            "labels_sha256": _label_digest(label_doc),
+            "first_reviewers": sorted({gt.reviewers[0] for gt in ground_truth.values()}),
+            "images": sorted(queued, key=lambda q: q["image_id"])}
+
+
+def _boxes_agree(a: GroundTruthImage, b: GroundTruthImage, iou_threshold: float) -> bool:
+    """Same objects: one-to-one class-aware matches at the IoU threshold, regular and ignore boxes separately."""
+    for ignore in (False, True):
+        ref = GroundTruthImage(a.image_id, a.width, a.height, tuple(
+            GroundTruthBox(x.class_id, x.box_xyxy, False) for x in a.boxes if x.ignore == ignore))
+        other = [Prediction(x.class_id, x.box_xyxy, None) for x in b.boxes if x.ignore == ignore]
+        match = match_image(other, ref, iou_threshold)
+        if match.fp or match.fn:
+            return False
+    return True
+
+
+def _image_annotations(label_doc: Mapping, image_id: str) -> list[dict]:
+    key = next(img["id"] for img in label_doc["images"] if img["vad_image_id"] == image_id)
+    return [a for a in sorted(label_doc["annotations"], key=lambda a: a["id"]) if a["image_id"] == key]
+
+
+def merge_reviews(first: Mapping, second: Mapping, queue: Mapping, adjudications: Mapping, task: TaskSpec,
+                  iou_threshold: float = 0.5) -> tuple[dict, list[dict]]:
+    """Merge a first pass and an independent second pass into one label file; return it and the disagreements.
+
+    Agreement keeps the first reviewer's boxes. A disagreement needs an adjudication (first or
+    second) and keeps the other opinion in ``vad_review.alternative``; unadjudicated
+    disagreements raise :class:`UnresolvedReviews` and nothing is merged.
+    """
+    if queue.get("version") != "review-queue-v1":
+        raise SampleError("--queue must be a review-queue-v1 file from `vad-route sample review-queue`")
+    if queue["labels_sha256"] != _label_digest(first):
+        raise SampleError("the first-pass labels changed since the queue was made; make a new queue")
+    first_gt, second_gt = load_ground_truth(first, task), load_ground_truth(second, task)
+    queued = {q["image_id"] for q in queue["images"]}
+    if missing := sorted(queued - set(second_gt)):
+        raise SampleError(f"queued images missing from the second pass: {missing[:5]}")
+    if extra := sorted(set(second_gt) - queued):
+        raise SampleError(f"second-pass images that are not in the queue: {extra[:5]}")
+    if adjudications and adjudications.get("vad_adjudications") != 1:
+        raise SampleError("the adjudications file must declare vad_adjudications: 1")
+    decisions = dict(adjudications.get("decisions", {}))
+
+    reviews, disagreements = {}, []
+    for image_id in sorted(first_gt):
+        first_by = first_gt[image_id].reviewers[0] if first_gt[image_id].reviewers else None
+        review = {"first": _check_handle(first_by, "first"), "second": None, "agreement": None, "decision": None,
+                  "adjudicator": None, "note": None, "alternative": []}
+        if image_id in queued:
+            if len(second_gt[image_id].reviewers) != 1:
+                raise SampleError(f"second-pass image {image_id!r} needs exactly one reviewer in vad_reviewers")
+            second_by = _check_handle(second_gt[image_id].reviewers[0], "second")
+            if second_by.casefold() == review["first"].casefold():
+                raise SampleError(f"image {image_id!r}: the second reviewer must differ from the first reviewer")
+            agree = _boxes_agree(first_gt[image_id], second_gt[image_id], iou_threshold)
+            review.update(second=second_by, agreement=agree)
+            if not agree:
+                decision = decisions.pop(image_id, None)
+                if decision is not None:
+                    if decision.get("decision") not in ("first", "second"):
+                        raise SampleError(f"image {image_id!r}: the decision must be first or second")
+                    review.update(decision=decision["decision"], note=decision.get("note"),
+                                  adjudicator=_check_handle(decision.get("adjudicator"), "adjudicating"))
+                    other = second if decision["decision"] == "first" else first
+                    review["alternative"] = [{k: a[k] for k in ("category_id", "bbox", "ignore", "iscrowd") if k in a}
+                                             for a in _image_annotations(other, image_id)]
+                disagreements.append({"image_id": image_id, "first": review["first"], "second": second_by,
+                                      "decision": review["decision"],
+                                      "first_annotations": _image_annotations(first, image_id),
+                                      "second_annotations": _image_annotations(second, image_id)})
+        reviews[image_id] = review
+    if decisions:
+        raise SampleError(f"adjudications for images without a disagreement: {sorted(decisions)[:5]}")
+    if any(d["decision"] is None for d in disagreements):
+        raise UnresolvedReviews(disagreements)
+
+    images, annotations = [], []
+    for image in sorted(first["images"], key=lambda img: img["vad_image_id"]):
+        image_id, review = image["vad_image_id"], reviews[image["vad_image_id"]]
+        source = second if review["decision"] == "second" else first
+        images.append({**image, "vad_reviewers": [r for r in (review["first"], review["second"]) if r],
+                       "vad_review": review})
+        for ann in _image_annotations(source, image_id):
+            annotations.append({**ann, "id": len(annotations) + 1, "image_id": image["id"]})
+    provenance = first.get("vad_label_provenance")
+    merged = {"vad_label_provenance": provenance if provenance == second.get("vad_label_provenance") else "mixed",
+              "categories": first["categories"], "images": images, "annotations": annotations,
+              "vad_merge": {"queue_labels_sha256": queue["labels_sha256"], "second_sha256": _label_digest(second),
+                            "adjudications_sha256": _digest(adjudications) if adjudications else None}}
+    return merged, disagreements

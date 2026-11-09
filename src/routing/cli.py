@@ -25,7 +25,9 @@ from .interfaces import Detector, RelevanceScorer
 from .metrics import LabelError, evaluate, evidence_status, image_results, load_ground_truth
 from .pipeline import RoutingPipeline
 from .replay import PrecomputedDetector, PrecomputedRelevance
-from .sample import SampleError, frozen_label_subset, group_manifest, make_split
+from .sample import (
+    SampleError, UnresolvedReviews, frozen_label_subset, group_manifest, make_split, merge_reviews, review_queue,
+)
 from .store import RouteStore, StoreLockedError, job_lock
 from .schemas import ErrorRecord, RouteRecord, TaskSpec, export_json_schemas
 from .task_config import RoutingConfig, load_config
@@ -57,6 +59,19 @@ def _parser() -> argparse.ArgumentParser:
     sp.add_argument("--labels", required=True, help="ground-truth labels (COCO JSON with vad_* fields)")
     sp.add_argument("--seed", type=int, required=True)
     sp.add_argument("--out-dir", required=True, help="new directory for split_manifest.json and frozen_lock.json")
+    rq = sample_sub.add_parser("review-queue", help="images for an independent second review")
+    rq.add_argument("--config", required=True)
+    rq.add_argument("--labels", required=True, help="first-pass labels (one reviewer per image)")
+    rq.add_argument("--groups", required=True, help="groups JSON from `vad-route sample group`")
+    rq.add_argument("--seed", type=int, required=True)
+    rq.add_argument("--out", required=True)
+    mg = sample_sub.add_parser("merge", help="merge first and second review; disagreements need adjudication")
+    mg.add_argument("--config", required=True)
+    mg.add_argument("--first", required=True, help="first-pass labels")
+    mg.add_argument("--second", required=True, help="second-pass labels for exactly the queued images")
+    mg.add_argument("--queue", required=True, help="queue JSON from `vad-route sample review-queue`")
+    mg.add_argument("--adjudications", help='{"vad_adjudications": 1, "decisions": {image_id: {decision, adjudicator}}}')
+    mg.add_argument("--out", required=True, help="merged label file (A3 format)")
     for name in ("shadow", "legacy"):
         p = sub.add_parser(name)
         p.add_argument("--config", required=True)
@@ -177,6 +192,8 @@ def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
 def _run_sample(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     if args.sample_cmd == "split":
         return _run_split(parser, args)
+    if args.sample_cmd in ("review-queue", "merge"):
+        return _run_review(parser, args)
     doc = group_manifest(load_manifest(args.images), args.max_hamming)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -185,6 +202,33 @@ def _run_sample(parser: argparse.ArgumentParser, args: argparse.Namespace) -> in
     to_check = sum(1 for p in doc["pairs"] if p["reason"] == "near_duplicate")
     print(f"{len(doc['images'])} images in {len(groups)} groups; {to_check} near-duplicate pairs to confirm; "
           f"{len(doc['unreadable'])} unreadable; written to {out}")
+    return 0
+
+
+def _run_review(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    def read(path):
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+
+    task, out = load_config(args.config).task, Path(args.out)
+    try:
+        if args.sample_cmd == "review-queue":
+            doc = review_queue(read(args.labels), read(args.groups), task, args.seed)
+            summary = f"{len(doc['images'])} images queued for a second review"
+        else:
+            adjudications = read(args.adjudications) if args.adjudications else {}
+            doc, disagreements = merge_reviews(read(args.first), read(args.second), read(args.queue), adjudications,
+                                               task)
+            summary = f"merged {len(doc['images'])} images; {len(disagreements)} adjudicated disagreements"
+    except UnresolvedReviews as e:
+        report = out.with_suffix(".disagreements.json")
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(json.dumps(e.disagreements, indent=2), encoding="utf-8")
+        parser.error(f"{e}; details in {report}; nothing merged")
+    except (SampleError, LabelError) as e:
+        parser.error(str(e))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"{summary}; written to {out}")
     return 0
 
 
