@@ -9,7 +9,7 @@ This file merges the plan, the Phase 0 integration map and the implementation no
 - **Part C — Integration map:** greenfield defaults, hardware, fixture, assumptions.
 - **Part D — How it works and why:** decision flow, behavior changes, design notes.
 
-**Snapshot:** phases 0–4 done, Phase 5 started, Phase 6 not started. Routing is disabled by default (`routing_enabled: false`). Tests: 92 default passed (re-run by the analysis agent after P2); `-m clip` and `-m lmstudio` last passed at 1 each, not rerun since. R3-1…R3-5, R4-1, T-6 and P2 are fixed. **Git:** 19 commits on `master` (head 76455b3), tags `v0.1-phase4-baseline` (208713e) and `v0.2-r3-blockers-fixed` (0435d99); the backup branch `backup/pre-author-rewrite` holds the pre-rewrite history.
+**Snapshot:** phases 0–4 done, Phase 5 started, Phase 6 not started. Routing is disabled by default (`routing_enabled: false`). Tests: 92 default passed (re-run by the analysis agent via `pixi run test`); `-m clip` and `-m lmstudio` 1 passed each (rerun under pixi by main_agent, not by the analysis agent). R3-1…R3-5, R4-1, T-6 and P2 are fixed. **Git:** 22 commits on `master` (head 2267644); environments are managed with pixi only, tags `v0.1-phase4-baseline` (208713e) and `v0.2-r3-blockers-fixed` (0435d99); the backup branch `backup/pre-author-rewrite` holds the pre-rewrite history.
 
 ---
 
