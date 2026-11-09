@@ -303,7 +303,7 @@ def _check_handle(handle: object, role: str) -> str:
         raise SampleError(str(e)) from None
 
 
-def _label_digest(label_doc: Mapping) -> str:
+def label_digest(label_doc: Mapping) -> str:
     """Order-independent content digest of a label file (images sorted by vad_image_id)."""
     ids = [img["vad_image_id"] for img in label_doc["images"]]
     return _digest({"provenance": label_doc.get("vad_label_provenance"), **frozen_label_subset(label_doc, ids)})
@@ -329,7 +329,7 @@ def review_queue(label_doc: Mapping, groups_doc: Mapping, task: TaskSpec, seed: 
     queued = [{"image_id": i, "group_id": group_of[i], "reason": "ambiguous"} for i in ambiguous]
     queued += [{"image_id": i, "group_id": g, "reason": "sample"} for g in sampled for i in rest[g]]
     return {"version": "review-queue-v1", "seed": seed, "sample_fraction": fraction,
-            "labels_sha256": _label_digest(label_doc),
+            "labels_sha256": label_digest(label_doc),
             "first_reviewers": sorted({gt.reviewers[0] for gt in ground_truth.values()}),
             "images": sorted(queued, key=lambda q: q["image_id"])}
 
@@ -361,7 +361,7 @@ def merge_reviews(first: Mapping, second: Mapping, queue: Mapping, adjudications
     """
     if queue.get("version") != "review-queue-v1":
         raise SampleError("--queue must be a review-queue-v1 file from `vad-route sample review-queue`")
-    if queue["labels_sha256"] != _label_digest(first):
+    if queue["labels_sha256"] != label_digest(first):
         raise SampleError("the first-pass labels changed since the queue was made; make a new queue")
     first_gt, second_gt = load_ground_truth(first, task), load_ground_truth(second, task)
     queued = {q["image_id"] for q in queue["images"]}
@@ -417,6 +417,6 @@ def merge_reviews(first: Mapping, second: Mapping, queue: Mapping, adjudications
     provenance = first.get("vad_label_provenance")
     merged = {"vad_label_provenance": provenance if provenance == second.get("vad_label_provenance") else "mixed",
               "categories": first["categories"], "images": images, "annotations": annotations,
-              "vad_merge": {"queue_labels_sha256": queue["labels_sha256"], "second_sha256": _label_digest(second),
+              "vad_merge": {"queue_labels_sha256": queue["labels_sha256"], "second_sha256": label_digest(second),
                             "adjudications_sha256": _digest(adjudications) if adjudications else None}}
     return merged, disagreements

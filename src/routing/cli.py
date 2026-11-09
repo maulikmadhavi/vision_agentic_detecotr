@@ -18,6 +18,7 @@ from service_detector_gdino.client import RemoteDetector
 from service_detector_vlm.openai_service_call import OpenAICompatibleVerifier
 from services_embedding.client import WEMM_TEXT_SCALE, WeMMMCPRelevanceScorer
 
+from .calibration import CalibrationError, fit_relevance
 from .evaluation import IsolationError, load_frozen, lock_frozen_set, route_report
 from .export import export_legacy, export_reviewed, export_routed
 from .image_inputs import ManifestEntry, image_id, load_image, load_manifest
@@ -84,6 +85,12 @@ def _parser() -> argparse.ArgumentParser:
     ra.add_argument("--adjudications", required=True, help="append-only adjudications JSONL")
     ra.add_argument("--out-dir", required=True, help="directory for reviewed.jsonl and annotations.json")
     ra.add_argument("--split-manifest", help="split manifest; tags each exported image with vad_split")
+    fr = sub.add_parser("fit-relevance", help="fit a relevance calibrator on the calibration split")
+    fr.add_argument("--config", required=True, help="config with the declared relevance.raw_scale and the task")
+    fr.add_argument("--trace", required=True, help="route_trace.jsonl of a shadow run over calibration images")
+    fr.add_argument("--labels", required=True, help="ground-truth labels (COCO JSON with vad_* fields)")
+    fr.add_argument("--split-manifest", required=True, help="only calibration-split images may be used")
+    fr.add_argument("--out", required=True, help="calibrator JSON to write (never overwritten)")
     for name in ("shadow", "legacy"):
         p = sub.add_parser(name)
         p.add_argument("--config", required=True)
@@ -133,6 +140,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_sample(parser, args)
     if args.cmd == "review":
         return _run_human_review(parser, args)
+    if args.cmd == "fit-relevance":
+        return _run_fit_relevance(parser, args)
 
     cfg = load_config(args.config)
     out = Path(args.out)
@@ -216,6 +225,27 @@ def _run_sample(parser: argparse.ArgumentParser, args: argparse.Namespace) -> in
     to_check = sum(1 for p in doc["pairs"] if p["reason"] == "near_duplicate")
     print(f"{len(doc['images'])} images in {len(groups)} groups; {to_check} near-duplicate pairs to confirm; "
           f"{len(doc['unreadable'])} unreadable; written to {out}")
+    return 0
+
+
+def _run_fit_relevance(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    out = Path(args.out)
+    if out.exists():
+        parser.error(f"{out} already exists; calibrators are versioned, write a new --out")
+    docs = {name: json.loads(Path(getattr(args, name)).read_text(encoding="utf-8"))
+            for name in ("labels", "split_manifest")}
+    try:
+        artifact = fit_relevance(_read_trace(args.trace), docs["labels"], docs["split_manifest"],
+                                 load_config(args.config))
+    except (CalibrationError, IsolationError, LabelError) as e:
+        parser.error(str(e))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if artifact["label_provenance"] != "human":
+        print("NOT A FINDING: the labels do not declare vad_label_provenance: human; this calibrator only "
+              "tests the tooling", file=sys.stderr)
+    separable = [c for c, p in artifact["classes"].items() if p["separable"]]
+    print(f"calibrator written to {out}" + (f"; separable (ridge-limited): {separable}" if separable else ""))
     return 0
 
 
