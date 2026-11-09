@@ -34,6 +34,37 @@ Earlier review findings are fixed and covered by regressions: SAHI parent proven
 
 ## Remaining work and possible solutions
 
+### Proposed architecture: independent model services
+
+**Recommendation (proposed, not implemented):** keep model serving in a top-level `third_party_service/` directory, outside the packaged `src/vad/` tree. The package owns routing, score calibration/combination, coordinate conversion, fusion, provenance, budgets and evaluation. Services own model loading and inference. The existing `Detector`, `RelevanceScorer` and `VLMVerifier` protocols are the integration boundary; extend them through HTTP clients instead of importing serving code.
+
+```text
+src/vad/routing/
+  adapters.py                 existing protocols and replay adapters
+  service_contracts.py        proposed versioned request/response models
+  remote_adapters.py          proposed HTTP detector/relevance clients
+third_party_service/
+  README.md                   endpoints, prerequisites, startup and model revisions
+  grounding_dino/             detector server, own environment/lock or container
+  relevance/                 CLIP/SigLIP server, own environment/lock or container
+  lm_studio/                 setup/config examples for the existing external VLM
+schemas/services/            generated service JSON Schemas
+tests/services/              contract tests using fake HTTP responses
+```
+
+Create only the services actually needed. Existing hosted APIs and LM Studio need client configuration, not another proxy server. Avoid a mandatory service gateway or importing `third_party_service` from the core package. Each local server runs as a separate process with its own dependencies; keep model weights and credentials outside Git. This isolates dependency conflicts, but does not increase GPU memory: start with sequential inference or server-side concurrency limits on the 12 GB GPU.
+
+| Boundary | Required behavior |
+|---|---|
+| Detector API | Image/crop plus registry IDs and descriptions in; boxes, raw confidences and explicit coordinate metadata out. Prefer xyxy pixels relative to the submitted image/crop. The router applies the crop offset once. Distinguish a valid empty result from a failed/unprocessed item. Support batching for tiles. |
+| Relevance API | Return per-class raw scores with scorer revision, prompt/config hash and score-scale identifier. Preserve each scorer separately; do not average incompatible scales. A scorer failure creates unknown evidence. Adding multiple scorers also requires extending the current single-scorer Stage A contract and a tested combination policy. |
+| VLM API | Keep request/class/candidate/region binding and `present / absent / uncertain` verdicts. Provider-specific responses are normalized by the adapter. A VLM never directly authors an accepted box. |
+| Identity and cache | Include schema version, request ID, image/crop digest, model revision and inference-config hash. Bind cache keys to these inputs and verify the response revision; do not trust a mutable endpoint alias as a model version. Mark unknown hosted-model provenance explicitly. |
+| Transport and budgets | Configure endpoint, timeout, concurrency and credentials by environment reference. Bound payloads and batch sizes. Count network time, calls and service charges separately from optional measured GPU time. Propagate failures to the existing error/review paths. Retry only under a defined idempotency policy; preserve the VLM interrupted-request behavior. |
+| Packaging and tests | Root Pixi remains lightweight; service dependencies stay in their own environment/container. Keep contract models authoritative in one place and export schemas for server validation. Core tests run without servers, torch or network. Integration tests check timeouts, malformed responses, model mismatch, empty detections, crop offsets and deterministic replay. |
+
+**Incremental implementation:** first add the wire contracts and `RemoteDetector` with mocked contract tests; connect one separately served detector and run shadow mode; then add `RemoteRelevanceScorer`. Retain `LMStudioVLM` and replay adapters. Move the optional local CLIP runtime into a service only after behavior parity is demonstrated. Add multiple relevance sources and their calibration after this single-service path works. TAO Grounding DINO below is one possible backend, not a dependency of the routing package.
+
 ### Candidate for T-1: NVIDIA TAO Grounding DINO
 
 **Recommendation:** trial pretrained Grounding DINO as the primary detector before adopting TAO for training. Its text-conditioned boxes suit the custom class registry; Qwen remains the verifier. Use descriptive prompts rather than opaque class IDs, and map results back to registry IDs. Recognition of unfamiliar parts still needs measurement on real images. TAO supports training, evaluation and export as later integration options ([model documentation](https://docs.nvidia.com/tao/tao-toolkit/latest/text/cv_finetuning/pytorch/object_detection/grounding_dino.html)).
