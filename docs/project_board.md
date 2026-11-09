@@ -2,7 +2,7 @@
 
 **Updated:** 2026-11-09 · **Owner:** user · **Implementer:** Claude · **Review log:** [reviewer_suggestion.md](reviewer_suggestion.md)
 
-**Status:** phases 0–4 done, Phase 5 started, Phase 6 not started. Routing is off by default (`routing_enabled: false`). `pixi run test`: 202 passed, 0 skipped, 1 warning (starlette testclient deprecation; harmless) (re-run by the analysis agent); the Grounding DINO server tests now run in the default suite (fastapi in the dev extra); live `test-vlm`, `test-gdino`, `test-wemm`: 1 passed each, `test-e2e` (all three services at once): 4 passed, and `test-live-required` (fails instead of skipping): 7 passed (reported by main_agent, synthetic images only; I re-ran `test-gdino` only, the WeMM URL is not in my environment). Environments: pixi only (the `clip` environment is gone). Git: tags `v0.1-phase4-baseline` (208713e) and `v0.2-r3-blockers-fixed` (0435d99); `backup/pre-author-rewrite` holds the pre-rewrite history.
+**Status:** phases 0–4 done, Phase 5 started, Phase 6 not started. Routing is off by default (`routing_enabled: false`). `pixi run test`: 218 passed, 0 skipped, 1 warning (starlette testclient deprecation; harmless) (re-run by the analysis agent); the Grounding DINO server tests now run in the default suite (fastapi in the dev extra); live `test-vlm`, `test-gdino`, `test-wemm`: 1 passed each, `test-e2e` (all three services at once): 4 passed, and `test-live-required` (fails instead of skipping): 7 passed (reported by main_agent, synthetic images only; I re-ran `test-gdino` only, the WeMM URL is not in my environment). Environments: pixi only (the `clip` environment is gone). Git: tags `v0.1-phase4-baseline` (208713e) and `v0.2-r3-blockers-fixed` (0435d99); `backup/pre-author-rewrite` holds the pre-rewrite history.
 
 The requirements and acceptance criteria are in [specification.md](specification.md); this board tracks their status only.
 
@@ -137,6 +137,7 @@ The requirements and acceptance criteria are in [specification.md](specification
 | F-43 | C3: packages flattened to `routing`, `services_embedding`, `service_detector_vlm`, `service_detector_gdino` (replay moved to `routing/replay.py`; `src/services` gone; one wheel). Golden keys unchanged. Older rows below name the old paths: history | 4665884 |
 | F-44 | C4: live tests renamed to VLM names; readiness is a real synthetic inference (reachable but failing = FAIL); unreachable = skip, or FAIL with `VAD_LIVE_REQUIRED=1` / `pixi run test-live-required`; https probes port 443. Config from `VAD_GDINO_*`, `VAD_VLM_*`, `VAD_WEMM_URL`. Spec link targets updated. 184 tests | cfac81c |
 | F-45 | Stage P: 18 pin tests (`tests/routing/test_pins.py`) for paths the suite never ran (T-14): cached VLM answer on resume and its budget count, `sahi_failed`, sliced-result reuse, accepted candidates not re-verified, missing-class cap, VLM budget skip, errors tagged with their step, missing file, `export-schema` CLI, crowding/hard escalation, completeness status, acceptance-off. `pipeline.py` now 100% line+branch covered; 14 of 15 mutations caught (the miss is an equivalent mutant). No source changes. 202 tests | 3d969dd |
+| F-46 | Simplicity review, stages 1 to 4 (behavior identical, each checked by a before/after snapshot of records, cache writes, errors): `cli.main` split into validate / build scorer / run legacy / run shadow (09a7dcd); `_route_image` uses `_load_or_compute_stage_a`, `_run_cached_detector` (62c51cb) and `_run_sliced_detection` (1884661); `_verify` uses `_verify_request` and is annotated (5e96991); WeMM client `_call` split into `_post` / `_decode` / `_check_meta` with one validating score loop, 8 malformed-reply shapes pinned first (6a2c6aa). 218 tests | 09a7dcd–6a2c6aa |
 | D-8 | Work committed incrementally; author email rewritten to gmail (user's choice) | — |
 
 ## Acceptance tests (from the spec)
@@ -210,7 +211,7 @@ There was no existing detector repository, so each interface is a neutral defaul
 
 ```bash
 pixi install
-pixi run test                   # 202 tests, no network / GPU (live: test-vlm, test-gdino, test-wemm, test-e2e, test-live-required)
+pixi run test                   # 218 tests, no network / GPU (live: test-vlm, test-gdino, test-wemm, test-e2e, test-live-required)
 pixi run test-vlm               # live VLM (any OpenAI-compatible endpoint)
 pixi run vad-route shadow --config configs/routing/example.yaml --images manifest.jsonl \
   --primary-predictions preds.jsonl --primary-version mymodel@sha --out runs/shadow1
