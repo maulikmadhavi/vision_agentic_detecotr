@@ -81,13 +81,14 @@ The original plan (spec text and Codex prompt) lives in git history (`git show 2
 | | Optional independent secondary | ⚠️ protocol, no real adapter | B-8 |
 | | SAHI with original-coordinate mapping | ⚠️ native slicer, fake detectors only | F-10, T-1 |
 | Policy | Pure deterministic rules, hash-sampled audits, replay across processes | ✅ | F-8 |
-| | Rules 1–8 (error queue, zero boxes ≠ easy, escalation, low-relevance audit, caps) | ✅ | F-8, F-14 |
+| | Rules 1–6, 8 (error queue, zero boxes ≠ easy, escalation, caps) | ✅ | F-8, F-14 |
+| | Rule 7: audit pool incl. poor quality (done) and domain shift (not done) | ⚠️ | T-4 |
 | | No automatic discard | ✅ by design | — |
 | Fusion | Class-aware matching, directional disagreement, provenance kept | ✅ | F-9 |
 | VLM | Verifier only; failures → `uncertain`; call cap; never authors boxes | ✅ | F-11, F-21, F-28 |
 | Completeness | `complete` only by human or calibrated policy; open findings block it | ✅ | F-12, F-30 |
 | | Human queue that records reviewer outcomes | ❌ | T-7 |
-| Persistence | Route persisted before expensive calls; resume without repeat calls | ✅ | F-13, F-28 |
+| Persistence | Route and detector results persisted; resume reuses them. VLM calls are at-most-once (attempt marker). A crash between a detector call and its persist re-runs the detector | ✅ | F-13, F-28 |
 | Calibration | Human-checked sample, split by source group | ❌ | T-2 |
 | | Isolation + frozen lock utilities | ✅ | F-15 |
 | | Isolation enforced in actual runs | ❌ | T-9 |
