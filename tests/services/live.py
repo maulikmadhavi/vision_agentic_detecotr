@@ -12,7 +12,8 @@ from urllib.parse import urlsplit
 import httpx
 import pytest
 
-from services.lmstudio import LMStudioVerifier
+from routing.task_config import VLMConfig
+from services.lmstudio import OpenAICompatibleVerifier
 
 GDINO_URL = os.environ.get("VAD_GDINO_URL", "http://127.0.0.1:8001")
 
@@ -42,8 +43,9 @@ def require_wemm() -> str:
     return url
 
 
-def require_lmstudio() -> LMStudioVerifier:
-    vlm = LMStudioVerifier()
+def require_lmstudio() -> OpenAICompatibleVerifier:
+    cfg = VLMConfig()  # the configured local endpoint/model (C4 makes this explicit)
+    vlm = OpenAICompatibleVerifier(cfg.base_url, cfg.model)
     try:
         ids = {m["id"] for m in httpx.get(f"{vlm.base_url}/models", timeout=5).json()["data"]}
     except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:

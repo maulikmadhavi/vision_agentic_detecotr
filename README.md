@@ -67,7 +67,7 @@ Shadow output: `routes.sqlite` (resumable step cache, records, error queue), `ro
 
 **Relevance (WeMM).** `--wemm` scores Stage A on the WeMM embedding server. Its endpoint is read only from `$VAD_WEMM_URL` (never put it in config or git). The score is the max text–image cosine over each class's positive prompts (scale `wemm_text_cosine_v1`; not a probability), so the config must set `relevance.raw_scale: wemm_text_cosine_v1` with bands chosen for that scale, or the run is refused. Images are downscaled so the longest side is at most 448 px (`--wemm-max-side`) before sending. If the server fails for an image, its relevance is `unavailable` (never a score of 0), it goes to review, and the run prints a stderr warning with the failure count. The model is recorded as `@unverified` until you pass `--wemm-build <sha>`, which is then checked on every response.
 
-`--vlm` uses LM Studio at `http://localhost:1234/v1` with `qwen3-vl-4b-instruct`. Change the model with `vlm.model` in the config.
+**VLM verifier.** `--vlm` calls an OpenAI-compatible Chat Completions endpoint at `vlm.base_url` with model `vlm.model` (the example config uses local LM Studio, `http://localhost:1234/v1`, `qwen3-vl-4b-instruct`). The endpoint must accept image data URIs (`image_url` content parts) and `response_format` of type `json_schema`; a server that rejects either gives `uncertain` answers, and the request is not retried in another format. Each request is one HTTP attempt; any failure becomes `uncertain` and the box goes to review. The VLM only confirms or rejects detector boxes; it never draws one. If the endpoint needs a token, set `vlm.api_key_env` to the **name** of an environment variable that holds it (sent as `Authorization: Bearer`); the token is never written to config, traces or the run key, and a named but unset variable stops the run. The recorded VLM identity is still `lmstudio:<model>`, so existing run keys stay valid.
 
 ## Tests
 
@@ -119,7 +119,7 @@ src/services/       package `services`: model-service clients and servers
   contracts.py      svc-1.0 wire models (detector server <-> client)
   http_detector.py  RemoteDetector (svc-1.0 HTTP client)
   wemm_mcp.py       WeMMMCPRelevanceScorer (WeMM MCP relevance client)
-  lmstudio.py       LMStudioVerifier (VLM verifier client)
+  lmstudio.py       OpenAICompatibleVerifier (VLM verifier client)
   replay.py         precomputed detections / relevance from JSONL
   runtime.py        file hashing + measured GPU time helpers
   grounding_dino/       Grounding DINO server; own pixi workspace (see its README.md)

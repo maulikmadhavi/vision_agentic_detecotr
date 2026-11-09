@@ -1,9 +1,14 @@
-"""VLM verifier client for LM Studio's OpenAI-compatible endpoint (verifier only; never authors boxes)."""
+"""VLM verifier client for any OpenAI-compatible Chat Completions endpoint (verifier only; never authors boxes).
+
+The endpoint must accept image data URIs (``image_url`` content parts) and
+``response_format: {"type": "json_schema"}``. LM Studio is one such server.
+"""
 
 from __future__ import annotations
 
 import base64
 import io
+import os
 from dataclasses import dataclass, field
 
 import httpx
@@ -26,19 +31,31 @@ _VLM_SCHEMA = {
 
 
 @dataclass
-class LMStudioVerifier:
-    """Self-hosted VLM via LM Studio's OpenAI-compatible endpoint.
+class OpenAICompatibleVerifier:
+    """VLM verifier over an OpenAI-compatible endpoint; ``base_url`` and ``model`` come from config.
 
-    Exactly one HTTP attempt per request, hard timeout, no retries. Any
-    transport error, malformed or contradictory answer becomes ``uncertain``.
+    Exactly one HTTP attempt per request, hard timeout, no retries (a rejected
+    ``json_schema`` request is not retried in another format). Any transport error,
+    malformed or contradictory answer becomes ``uncertain``. ``api_key_env`` names an
+    environment variable holding a bearer token; the token never enters repr, traces or
+    the recorded identity. The identity stays ``lmstudio:{model}`` until a deliberate migration.
     """
 
-    base_url: str = "http://localhost:1234/v1"
-    model: str = "qwen3-vl-4b-instruct"
+    base_url: str
+    model: str
     timeout_s: float = 60
     max_tokens: int = 200
     crop_padding: float = 0.25
+    api_key_env: str | None = None
     transport: httpx.BaseTransport | None = field(default=None, repr=False)
+    _headers: dict[str, str] = field(default_factory=dict, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.api_key_env:
+            token = os.environ.get(self.api_key_env)
+            if not token:
+                raise ValueError(f"vlm.api_key_env names {self.api_key_env!r}, but that environment variable is not set")
+            self._headers = {"Authorization": f"Bearer {token}"}
 
     @property
     def model_version(self) -> str:
@@ -75,7 +92,7 @@ class LMStudioVerifier:
         }
         try:
             with httpx.Client(timeout=self.timeout_s, transport=self.transport) as client:
-                resp = client.post(f"{self.base_url}/chat/completions", json=body)
+                resp = client.post(f"{self.base_url}/chat/completions", json=body, headers=self._headers)
             resp.raise_for_status()
             content = resp.json()["choices"][0]["message"]["content"]
         except httpx.TimeoutException as e:

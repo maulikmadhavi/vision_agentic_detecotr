@@ -14,7 +14,7 @@ import os
 import sys
 from pathlib import Path
 
-from services.lmstudio import LMStudioVerifier
+from services.lmstudio import OpenAICompatibleVerifier
 from services.replay import PrecomputedDetector, PrecomputedRelevance
 from .evaluation import route_report
 from .export import export_legacy, export_routed
@@ -62,7 +62,7 @@ def _parser() -> argparse.ArgumentParser:
             p.add_argument("--wemm-build", help="expected meta.build; without it the version is recorded as unverified")
             p.add_argument("--wemm-max-side", type=int, default=448, help="downscale longest image side before sending")
             p.add_argument("--relevance-version", default="precomputed", help="scorer identifier only (not verified); the file's SHA-256 is bound into the run key separately")
-            p.add_argument("--vlm", action="store_true", help="enable LM Studio verification (overrides config)")
+            p.add_argument("--vlm", action="store_true", help="enable VLM verification at vlm.base_url (overrides config)")
     return ap
 
 
@@ -125,8 +125,13 @@ def main(argv: list[str] | None = None) -> int:
                          "(with bands chosen for that scale)")
         relevance = WeMMMCPRelevanceScorer(url=url, model=args.wemm_model, dim=args.wemm_dim, build=args.wemm_build,
                                           max_side=args.wemm_max_side)
-    vlm = LMStudioVerifier(cfg.vlm.base_url, cfg.vlm.model, cfg.vlm.timeout_s, cfg.vlm.max_tokens,
-                      cfg.vlm.crop_padding) if cfg.vlm.enabled else None
+    vlm = None
+    if cfg.vlm.enabled:
+        try:
+            vlm = OpenAICompatibleVerifier(cfg.vlm.base_url, cfg.vlm.model, cfg.vlm.timeout_s, cfg.vlm.max_tokens,
+                                           cfg.vlm.crop_padding, cfg.vlm.api_key_env)
+        except ValueError as e:
+            parser.error(str(e))
     try:
         with job_lock(out):
             store = RouteStore(out / "routes.sqlite")

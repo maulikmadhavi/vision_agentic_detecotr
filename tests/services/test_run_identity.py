@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from services.lmstudio import LMStudioVerifier
+from services.lmstudio import OpenAICompatibleVerifier
 from services.replay import PrecomputedDetector, PrecomputedRelevance
 from routing.pipeline import RoutingPipeline
 from routing.store import RouteStore
@@ -17,7 +17,7 @@ def test_replay_and_vlm_run_key_is_unchanged_by_moves_and_renames(tmp_path):
     (tmp_path / "r.jsonl").write_bytes(b'{"image_id": "a", "scores": {}}\n')
     pipe = RoutingPipeline(config(vlm={"enabled": True}), PrecomputedDetector(tmp_path / "p.jsonl", "prim@1"),
                            RouteStore(":memory:"), relevance=PrecomputedRelevance(tmp_path / "r.jsonl", "rel@1"),
-                           vlm=LMStudioVerifier())
+                           vlm=OpenAICompatibleVerifier("http://localhost:1234/v1", "qwen3-vl-4b-instruct"))
     run = pipe.run_info
     assert (run.primary_model, run.relevance_scorer, run.vlm_model) == ("prim@1", "rel@1", "lmstudio:qwen3-vl-4b-instruct")
     ref = ImageRef(id="a", uri="a.png", width=320, height=240, sha256="0" * 64)

@@ -107,8 +107,11 @@ class AuditConfig(Strict):
 
 class VLMConfig(Strict):
     enabled: bool = False
-    base_url: str = "http://localhost:1234/v1"
+    base_url: str = "http://localhost:1234/v1"  # any OpenAI-compatible endpoint; LM Studio is the local example
     model: str = "qwen3-vl-4b-instruct"
+    # Name of an environment variable holding a bearer token (never the token itself).
+    # Not part of config_hash: credentials do not change results or cache identity.
+    api_key_env: str | None = None
     timeout_s: float = Field(default=60, gt=0)
     max_tokens: int = Field(default=200, gt=0)
     crop_padding: float = Field(default=0.25, ge=0)
@@ -142,7 +145,8 @@ class RoutingConfig(Strict):
         return self
 
     def config_hash(self) -> str:
-        return hashlib.sha256(canonical_json(self).encode()).hexdigest()[:16]
+        data = self.model_dump(mode="json", exclude={"vlm": {"api_key_env"}})
+        return hashlib.sha256(canonical_json(data).encode()).hexdigest()[:16]
 
 
 def load_config(path: str | Path) -> RoutingConfig:

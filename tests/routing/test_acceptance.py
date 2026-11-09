@@ -13,7 +13,7 @@ import pytest
 
 from routing import cli
 from routing.interfaces import RawDetection
-from services.lmstudio import LMStudioVerifier
+from services.lmstudio import OpenAICompatibleVerifier
 from routing.evaluation import IsolationError, assert_not_frozen, check_isolation, load_frozen, lock_frozen_set
 from routing.export import load_annotations
 from routing.matching import iou
@@ -300,7 +300,8 @@ def _vlm_with(handler):
         calls.append(request)
         return handler(request)
 
-    return LMStudioVerifier(transport=httpx.MockTransport(h), timeout_s=1), calls
+    return OpenAICompatibleVerifier("http://vlm.test/v1", "qwen3-vl-4b-instruct", transport=httpx.MockTransport(h),
+                                    timeout_s=1), calls
 
 
 def _chat(content):
@@ -314,6 +315,7 @@ def _chat(content):
     (lambda r: _chat(json.dumps({"class_id": "other_class", "verdict": "present", "reason": "x"})), "vlm_contradictory"),
     (lambda r: _chat(None), "vlm_malformed"),
     (lambda r: httpx.Response(500, text="boom"), "vlm_unavailable"),
+    (lambda r: httpx.Response(400, json={"error": "response_format json_schema not supported"}), "vlm_unavailable"),
     (lambda r: httpx.Response(200, json={"unexpected": True}), "vlm_unavailable"),
 ])
 def test_vlm_bad_responses_become_uncertain(handler, reason):
