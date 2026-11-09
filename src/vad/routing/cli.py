@@ -17,6 +17,7 @@ from .adapters import LMStudioVLM, PrecomputedDetector, PrecomputedRelevance
 from .evaluation import route_report
 from .export import export_legacy, export_routed
 from .pipeline import RouteStore, RoutingPipeline, StoreLockedError, job_lock, load_image, load_manifest
+from .remote_adapters import RemoteDetector
 from .schemas import ErrorRecord, RouteRecord, export_json_schemas
 from .task_config import load_config
 
@@ -30,8 +31,19 @@ def _parser() -> argparse.ArgumentParser:
         p = sub.add_parser(name)
         p.add_argument("--config", required=True)
         p.add_argument("--images", required=True, help="image directory or JSONL manifest")
-        p.add_argument("--primary-predictions", required=True)
-        p.add_argument("--primary-version", required=True, help="model identifier only (not verified); the file's SHA-256 is bound into the run key separately")
+        version_help = "model identifier only (not verified); the file's SHA-256 is bound into the run key separately"
+        if name == "legacy":
+            p.add_argument("--primary-predictions", required=True)
+            p.add_argument("--primary-version", required=True, help=version_help)
+        else:
+            src = p.add_mutually_exclusive_group(required=True)
+            src.add_argument("--primary-predictions")
+            src.add_argument("--primary-url", help="svc-1.0 detector server base URL (RemoteDetector)")
+            p.add_argument("--primary-version", help=version_help + "; with --primary-predictions only")
+            p.add_argument("--primary-model-id", help="expected model id reported by --primary-url")
+            p.add_argument("--primary-revision", help="expected model revision reported by --primary-url")
+            p.add_argument("--primary-weights-sha256", help="expected weights digest (verified per response)")
+            p.add_argument("--primary-timeout", type=float, default=60.0, help="seconds per request to --primary-url")
         p.add_argument("--out", required=True)
         if name == "shadow":
             p.add_argument("--secondary-predictions")
@@ -51,6 +63,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if getattr(args, "secondary_predictions", None) and not args.secondary_version:
         parser.error("--secondary-version is required with --secondary-predictions (model versions are part of the record hash)")
+    if args.cmd == "shadow":
+        remote_flags = (args.primary_model_id, args.primary_revision, args.primary_weights_sha256)
+        if args.primary_url and args.primary_version:
+            parser.error("--primary-version is not used with --primary-url (the version comes from "
+                         "--primary-model-id/--primary-revision)")
+        if args.primary_url and not (args.primary_model_id and args.primary_revision):
+            parser.error("--primary-url needs --primary-model-id and --primary-revision")
+        if not args.primary_url and not args.primary_version:
+            parser.error("--primary-version is required with --primary-predictions")
+        if not args.primary_url and any(remote_flags):
+            parser.error("--primary-model-id/--primary-revision/--primary-weights-sha256 are only with --primary-url")
     if args.cmd == "export-schema":
         for f in export_json_schemas(args.out):
             print(f)
@@ -59,7 +82,12 @@ def main(argv: list[str] | None = None) -> int:
     cfg = load_config(args.config)
     out = Path(args.out)
     entries = load_manifest(args.images)
-    primary = PrecomputedDetector(args.primary_predictions, args.primary_version)
+    if getattr(args, "primary_url", None):
+        primary = RemoteDetector(base_url=args.primary_url, task=cfg.task, model_id=args.primary_model_id,
+                                 model_revision=args.primary_revision, weights_sha256=args.primary_weights_sha256,
+                                 timeout_s=args.primary_timeout)
+    else:
+        primary = PrecomputedDetector(args.primary_predictions, args.primary_version)
 
     if args.cmd == "legacy":
         preds = []

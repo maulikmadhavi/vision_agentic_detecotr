@@ -161,3 +161,55 @@ def test_class_outside_the_task_raises_before_any_call():
     with pytest.raises(RemoteDetectorError, match="not in task"):
         detector(server(lambda b, i: ok(b, i), calls)).detect(_img(), "img1", (CLASS_A, "unknown_q"))
     assert calls == []
+
+
+# --- stage 1: `vad-route shadow --primary-url` -------------------------------------------------
+
+
+def _cli_args(fx, out, *extra):
+    return ["shadow", "--config", str(fx["config"]), "--images", str(fx["manifest"]), "--out", str(out),
+            "--relevance-scores", str(fx["relevance"]), *extra]
+
+
+def test_cli_shadow_with_primary_url_uses_remote_detector(tmp_path, monkeypatch):
+    from vad.routing import cli
+    from ..routing.helpers import make_fixture
+
+    blob = BlobDetector()
+
+    def reply(body, img):
+        found = blob.detect(img, "x", task().class_ids).detections
+        return ok(body, img, [{"class_id": d.class_id, "box_xyxy": list(d.box_xyxy), "score": 0.9} for d in found])
+
+    calls = []
+    monkeypatch.setattr(cli, "RemoteDetector", lambda **kw: RemoteDetector(transport=server(reply, calls), **kw))
+    fx = make_fixture(tmp_path / "fx")
+    out = tmp_path / "shadow"
+    assert cli.main(_cli_args(fx, out, "--primary-url", "http://detector.test", "--primary-model-id", "gdino-tiny",
+                              "--primary-revision", REV, "--primary-weights-sha256", WEIGHTS)) == 0
+    assert calls  # the remote server was actually called
+    trace = [json.loads(line) for line in (out / "route_trace.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert {t["run"]["primary_model"] for t in trace} == {f"remote:gdino-tiny@{REV}"}  # single version source
+    assert {t["run"]["primary_artifact_digest"] for t in trace} == {WEIGHTS}
+    ann = json.loads((out / "annotations.json").read_text(encoding="utf-8"))
+    easy = next(i["id"] for i in ann["images"] if i["vad_image_id"] == "easy")
+    assert [a["bbox"] for a in ann["annotations"] if a["image_id"] == easy] == [[60.0, 60.0, 100.0, 100.0]]
+
+
+@pytest.mark.parametrize("extra,message", [
+    (["--primary-url", "http://d", "--primary-model-id", "m", "--primary-revision", "r", "--primary-version", "v@1"],
+     "not used with --primary-url"),
+    (["--primary-url", "http://d", "--primary-model-id", "m"], "needs --primary-model-id and --primary-revision"),
+    (["--primary-predictions", "p.jsonl"], "--primary-version is required"),
+    (["--primary-predictions", "p.jsonl", "--primary-version", "v@1", "--primary-revision", "r"],
+     "only with --primary-url"),
+    (["--primary-predictions", "p.jsonl", "--primary-version", "v@1", "--primary-url", "http://d"], "not allowed with"),
+], ids=["version-with-url", "missing-revision", "missing-version", "remote-flag-without-url", "both-sources"])
+def test_cli_primary_source_flags_are_validated(tmp_path, capsys, extra, message):
+    from vad.routing import cli
+    from ..routing.helpers import make_fixture
+
+    fx = make_fixture(tmp_path / "fx")
+    with pytest.raises(SystemExit) as e:
+        cli.main(_cli_args(fx, tmp_path / "out", *extra))
+    assert e.value.code == 2 and message in capsys.readouterr().err

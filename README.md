@@ -53,6 +53,13 @@ pixi run vad-route shadow --config configs/routing/example.yaml --images path\to
   --primary-predictions preds.jsonl --primary-version mymodel@sha --out runs\shadow1
 ```
 
+**Remote primary detector** (shadow only; replaces `--primary-predictions` and `--primary-version`): `--primary-url` is an svc-1.0 detector server, and `--primary-model-id` / `--primary-revision` are required and checked against every response. `--primary-weights-sha256` (verified when given) and `--primary-timeout` (seconds, default 60) are optional. Any server failure sends that image to the error queue.
+
+```powershell
+pixi run vad-route shadow --config configs/routing/example.yaml --images path\to\manifest.jsonl `
+  --primary-url http://localhost:8001 --primary-model-id grounding-dino-tiny --primary-revision <rev> --out runs\shadow1
+```
+
 **Precomputed inputs.** Every manifest image needs an explicit row in the predictions file; `"detections": []` is a valid zero-box result. If an image has no row, it goes to the error queue (`routing_failed_at:primary: MissingPrediction`) and the rest of the batch continues. `legacy` mode instead stops with an error. Duplicate or malformed rows are rejected when the file loads.
 
 **Versions vs. content.** `--primary-version`, `--secondary-version` and `--relevance-version` are identifiers you supply. They are **not** verified hashes of a model. To stop stale cache reuse anyway, each precomputed file's SHA-256 goes into `RunInfo.*_artifact_digest` and therefore into the record key. If you edit a predictions file but keep the same version string, the run gets a new key and nothing is reused from `routes.sqlite`. The model weights behind the predictions are still not verified.
