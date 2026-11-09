@@ -307,15 +307,23 @@ def evaluate(ground_truth: Mapping[str, GroundTruthImage], class_ids: Sequence[s
     regular = sum(1 for gt in ground_truth.values() for box in gt.boxes if not box.ignore)
     negatives = sum(1 for gt in ground_truth.values() if not any(not box.ignore for box in gt.boxes))
     detections = {i: results[i].detections for i in ground_truth if i in results and results[i].detections}
-    detector = {"source": "primary_candidates"}
+    from .coco_eval import coco_map, coco_unavailable  # here: coco_eval imports this module
+
+    # Standard names (map50_95, map50) appear only in the official evaluator's "coco" block; the
+    # custom evaluator's results carry a custom_ prefix (it differs from COCO on the 100-detection
+    # cap and on how ignore/crowd boxes match).
+    detector = {"source": "primary_candidates", "evaluator": "custom-vad-1"}
     unscored = sum(1 for preds in detections.values() for p in preds if p.score is None)
     if unscored:
-        detector.update(map50_95=None, map50=None,
-                        map_unavailable=f"{unscored} detections have no confidence; AP needs scored detections")
+        reason = f"{unscored} detections have no confidence; AP needs scored detections"
+        detector.update(custom_map50_95=None, custom_map50=None, map_unavailable=reason)
+        detector["coco"] = coco_unavailable(reason)
     else:
         maps = mean_average_precision(detections, ground_truth, class_ids)
-        detector.update(map50_95=maps["map50_95"], map50=maps["map50"], ap_per_class=maps["per_class"],
+        detector.update(custom_map50_95=maps["map50_95"], custom_map50=maps["map50"],
+                        custom_ap_per_class=maps["per_class"],
                         classes_without_ground_truth=maps["classes_without_ground_truth"])
+        detector["coco"] = coco_map(detections, ground_truth, class_ids)
     detector.update(
         recall_by_class={c: {"found": f, "boxes": n, "recall": _rate(f, n)} for c, (f, n) in by_class.items()},
         recall_by_size={s: {"found": f, "boxes": n, "recall": _rate(f, n)} for s, (f, n) in by_size.items()},

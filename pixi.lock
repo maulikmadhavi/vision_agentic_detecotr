@@ -46,6 +46,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/63/34/ba1c580383c9eada3711951fef0795c80b829a078d72188184bcab9dd527/packaging-26.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/ef/fe/f5cdaa2d1c4086e757430f368c271a58ee29cfe7378e7ae7b9d964015c25/pillow-13.0.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/40/9e/2b38731e0fc536806f16490e1a12d7f0dc2a1235aa8cc07bcc75416a7daa/pluggy-1.7.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/23/59/dc81895beff4e1207a829d40d442ea87cefaac9f6499151965f05c479619/pycocotools-2.0.11-cp312-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/72/b8/b864503789ef5c58597d2a7b4adbee62c26440ab1e682581fc6838df8947/pydantic-2.14.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/2b/c0/1c8f2c8f1b03d3fe2fdd7962df8f5a744fe48c90b4c49615e4eb77d04141/pydantic_core-2.50.4-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/71/46/17f022dd3e953bf20a04a028a21ec746d942f8d2af30fa0f124fa0e6a684/pygments-2.21.0-py3-none-any.whl
@@ -90,6 +91,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/63/34/ba1c580383c9eada3711951fef0795c80b829a078d72188184bcab9dd527/packaging-26.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d7/ed/1b16fb66a37e1b9e41370b93b2c614c7da761a5b2a41dc333f7af4639962/pillow-13.0.0-cp313-cp313-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/40/9e/2b38731e0fc536806f16490e1a12d7f0dc2a1235aa8cc07bcc75416a7daa/pluggy-1.7.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/83/b4/f6708404ff494706b80e714b919f76dc4ec9845a4007affd6d6b0843f928/pycocotools-2.0.11-cp312-abi3-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/72/b8/b864503789ef5c58597d2a7b4adbee62c26440ab1e682581fc6838df8947/pydantic-2.14.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/e7/e0/95b651213e79ffe0cbee855590bf5cfdf8e3a0d90a7fc73a080e63f7cc38/pydantic_core-2.50.4-cp313-cp313-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/71/46/17f022dd3e953bf20a04a028a21ec746d942f8d2af30fa0f124fa0e6a684/pygments-2.21.0-py3-none-any.whl
@@ -632,6 +634,22 @@ packages:
   version: 1.7.0
   sha256: 7dd7b0d8832ba3cb632c306926ded123429211b83641b35dc5c41ad2d34f9bec
   requires_python: '>=3.10'
+- pypi: https://files.pythonhosted.org/packages/23/59/dc81895beff4e1207a829d40d442ea87cefaac9f6499151965f05c479619/pycocotools-2.0.11-cp312-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+  name: pycocotools
+  version: 2.0.11
+  sha256: a82d1c9ed83f75da0b3f244f2a3cf559351a283307bd9b79a4ee2b93ab3231dd
+  requires_dist:
+  - numpy
+  - matplotlib>=2.1.0 ; extra == 'all'
+  requires_python: '>=3.9'
+- pypi: https://files.pythonhosted.org/packages/83/b4/f6708404ff494706b80e714b919f76dc4ec9845a4007affd6d6b0843f928/pycocotools-2.0.11-cp312-abi3-win_amd64.whl
+  name: pycocotools
+  version: 2.0.11
+  sha256: ffe806ce535f5996445188f9a35643791dc54beabc61bd81e2b03367356d604f
+  requires_dist:
+  - numpy
+  - matplotlib>=2.1.0 ; extra == 'all'
+  requires_python: '>=3.9'
 - pypi: https://files.pythonhosted.org/packages/72/b8/b864503789ef5c58597d2a7b4adbee62c26440ab1e682581fc6838df8947/pydantic-2.14.3-py3-none-any.whl
   name: pydantic
   version: 2.14.3
@@ -849,7 +867,7 @@ packages:
 - pypi: ./
   name: vad
   version: 0.1.0
-  sha256: f077f093f54d7716347815355947bfa289e6b6bcdcb6116530bd63ca7b06bfee
+  sha256: 3b231b175c09c05e59c956a3fb0a2de184c34317fd1f30f9f79499cf13aeb8cd
   requires_dist:
   - pydantic>=2.7,<3
   - numpy>=1.26
@@ -858,6 +876,7 @@ packages:
   - httpx>=0.27
   - pytest>=8 ; extra == 'dev'
   - fastapi>=0.115 ; extra == 'dev'
+  - pycocotools>=2.0.8 ; extra == 'eval'
   requires_python: '>=3.11'
 - conda: https://conda.anaconda.org/conda-forge/win-64/vc-14.5-ha367084_42.conda
   sha256: 0598ca1ce913618cff9bd90391bcf75cd9edb22057c85dd6784dd762b7a888e2

@@ -15,6 +15,9 @@ dependencies = [
 # Slicing is native (src/routing/slicing.py); nothing imports the SAHI package, so
 # there is no SAHI extra to pin. Add one with an exact pin if a SAHI bridge is written.
 dev = ["pytest>=8", "fastapi>=0.115"]  # fastapi: Grounding DINO server fake-model tests (no torch)
+# Official COCO bbox evaluator: `vad-route evaluate` reports it next to the custom one (user-approved, D-15). An extra,
+# not a core dependency, so model-serving installs of vad (e.g. the Grounding DINO workspace) do not get it.
+eval = ["pycocotools>=2.0.8"]
 
 [project.scripts]
 vad-route = "routing.cli:main"
@@ -50,7 +53,7 @@ python = "3.13.*"
 vad = { path = ".", editable = true }
 
 [tool.pixi.environments]
-default = { features = ["dev"], solve-group = "default" }
+default = { features = ["dev", "eval"], solve-group = "default" }
 
 [tool.pixi.tasks]
 test = "pytest"

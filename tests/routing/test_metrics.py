@@ -295,8 +295,8 @@ def test_detector_map_includes_the_failed_image_as_missed_ground_truth():
     gt, results = _report_fixture()
     det = evaluate(gt, task().class_ids, results)["detector"]
     # Class A: TP, TP, FP over 3 boxes -> 67/101 at IoU 0.50-0.90; at 0.95 the second TP fails -> 34/101.
-    assert det["map50_95"] == pytest.approx((9 * 67 / 101 + 34 / 101) / 10 / 2)
-    assert det["map50"] == pytest.approx(67 / 101 / 2)
+    assert det["custom_map50_95"] == pytest.approx((9 * 67 / 101 + 34 / 101) / 10 / 2)
+    assert det["custom_map50"] == pytest.approx(67 / 101 / 2)
 
 
 def test_accepted_annotations_get_precision_recall_misses_and_review_coverage():
@@ -310,7 +310,7 @@ def test_detector_map_is_unavailable_when_a_detection_has_no_confidence():
     gt, results = _report_fixture()
     results["p2"] = ImageResult(detections=(_p(CLASS_A, (0, 0, 120, 110), None),), accepted=(), flagged_for_review=True)
     det = evaluate(gt, task().class_ids, results)["detector"]
-    assert det["map50_95"] is None and "confidence" in det["map_unavailable"]
+    assert det["custom_map50_95"] is None and "confidence" in det["map_unavailable"]
 
 
 HUMAN, VERIFIED = {"vad_label_provenance": "human"}, "verified frozen_eval"
