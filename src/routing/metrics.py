@@ -206,3 +206,109 @@ def mean_average_precision(predictions: Mapping[str, Sequence[Prediction]],
         "per_class": per_class, "classes_without_ground_truth": without,
         "iou_thresholds": list(IOU_THRESHOLDS),
     }
+
+
+# --------------------------------------------------------------------------- run report
+
+SIZE_STRATA = (("small", 32 ** 2), ("medium", 96 ** 2), ("large", float("inf")))  # COCO areas, in pixels
+
+
+@dataclass(frozen=True)
+class ImageResult:
+    """What a run produced for one image, reduced to what the metrics need."""
+
+    detections: tuple[Prediction, ...]  # scored detector output (primary candidates)
+    accepted: tuple[Prediction, ...]    # accepted annotations; no scores
+    flagged_for_review: bool            # completeness is not "complete": a human will look at it
+
+
+def image_results(records: Sequence) -> dict[str, ImageResult]:
+    """Reduce RouteRecords to :class:`ImageResult` by image id."""
+    return {r.image.id: ImageResult(
+        detections=tuple(Prediction(d.class_id, d.box_xyxy, d.raw_confidence) for d in r.primary_candidates),
+        accepted=tuple(Prediction(c.class_id, c.box_xyxy, None) for c in r.final_candidates if c.status == "accepted"),
+        flagged_for_review=r.completeness.status != "complete") for r in records}
+
+
+def evidence_status(label_doc: Mapping) -> str:
+    """Metrics count as evidence only for labels declared human: top-level ``vad_label_provenance: "human"``."""
+    if label_doc.get("vad_label_provenance") == "human":
+        return "human labels (declared by vad_label_provenance)"
+    return ('NOT A FINDING: the label file does not declare "vad_label_provenance": "human" '
+            "(synthetic or unreviewed labels); these numbers test the tooling, not the detector")
+
+
+def _size_stratum(box: Box) -> str:
+    area = (box[2] - box[0]) * (box[3] - box[1])
+    return next(name for name, limit in SIZE_STRATA if area < limit)
+
+
+def _rate(found: int, total: int) -> float | None:
+    return found / total if total else None
+
+
+def evaluate(ground_truth: Mapping[str, GroundTruthImage], class_ids: Sequence[str],
+             results: Mapping[str, ImageResult], iou_threshold: float = 0.5) -> dict:
+    """Detector and accepted-annotation metrics over the labelled images.
+
+    A labelled image without a result is an operational failure: it is listed, and all its
+    ground truth counts as missed (never dropped). Results for unlabelled images are only counted.
+    Accepted annotations carry no scores, so they get precision/recall, not AP.
+    """
+    failed = sorted(set(ground_truth) - set(results))
+    empty = ImageResult((), (), False)
+    by_class = {c: [0, 0] for c in class_ids}
+    by_size = {name: [0, 0] for name, _ in SIZE_STRATA}
+    det_fp = neg_fp = 0
+    acc = dict.fromkeys(("tp", "fp", "missed", "failed", "review", "silent"), 0)
+    for image_id, gt in sorted(ground_truth.items()):
+        result = results.get(image_id, empty)
+        det = match_image(result.detections, gt, iou_threshold, class_ids)
+        found = {j for _, j in det.tp}
+        for j, box in enumerate(gt.boxes):
+            if not box.ignore:
+                for counts in (by_class[box.class_id], by_size[_size_stratum(box.box_xyxy)]):
+                    counts[0] += j in found
+                    counts[1] += 1
+        det_fp += len(det.fp)
+        if not any(not box.ignore for box in gt.boxes):
+            neg_fp += len(det.fp)
+        ann = match_image(result.accepted, gt, iou_threshold, class_ids)
+        acc["tp"] += len(ann.tp)
+        acc["fp"] += len(ann.fp)
+        acc["missed"] += len(ann.fn)
+        if image_id in failed:
+            acc["failed"] += len(ann.fn)
+        elif result.flagged_for_review:
+            acc["review"] += len(ann.fn)
+        else:
+            acc["silent"] += len(ann.fn)
+    regular = sum(1 for gt in ground_truth.values() for box in gt.boxes if not box.ignore)
+    negatives = sum(1 for gt in ground_truth.values() if not any(not box.ignore for box in gt.boxes))
+    detections = {i: results[i].detections for i in ground_truth if i in results and results[i].detections}
+    detector = {"source": "primary_candidates"}
+    unscored = sum(1 for preds in detections.values() for p in preds if p.score is None)
+    if unscored:
+        detector.update(map50_95=None, map50=None,
+                        map_unavailable=f"{unscored} detections have no confidence; AP needs scored detections")
+    else:
+        maps = mean_average_precision(detections, ground_truth, class_ids)
+        detector.update(map50_95=maps["map50_95"], map50=maps["map50"], ap_per_class=maps["per_class"],
+                        classes_without_ground_truth=maps["classes_without_ground_truth"])
+    detector.update(
+        recall_by_class={c: {"found": f, "boxes": n, "recall": _rate(f, n)} for c, (f, n) in by_class.items()},
+        recall_by_size={s: {"found": f, "boxes": n, "recall": _rate(f, n)} for s, (f, n) in by_size.items()},
+        fp_per_image=_rate(det_fp, len(ground_truth)), fp_per_negative_image=_rate(neg_fp, negatives))
+    return {
+        "iou_threshold": iou_threshold,
+        "images": {"labelled": len(ground_truth), "with_result": len(ground_truth) - len(failed),
+                   "negative": negatives, "operational_failures": failed,
+                   "unlabelled_results": len(set(results) - set(ground_truth))},
+        "detector": detector,
+        "accepted_annotations": {
+            "true_positives": acc["tp"], "false_positives": acc["fp"],
+            "precision": _rate(acc["tp"], acc["tp"] + acc["fp"]), "recall": _rate(acc["tp"], regular),
+            "missed": acc["missed"], "missed_in_failed_images": acc["failed"], "missed_in_review": acc["review"],
+            "silent_misses": acc["silent"], "review_coverage": _rate(acc["review"], acc["review"] + acc["silent"]),
+        },
+    }

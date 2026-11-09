@@ -22,6 +22,7 @@ from .evaluation import route_report
 from .export import export_legacy, export_routed
 from .image_inputs import ManifestEntry, load_image, load_manifest
 from .interfaces import Detector, RelevanceScorer
+from .metrics import LabelError, evaluate, evidence_status, image_results, load_ground_truth
 from .pipeline import RoutingPipeline
 from .replay import PrecomputedDetector, PrecomputedRelevance
 from .store import RouteStore, StoreLockedError, job_lock
@@ -34,6 +35,12 @@ def _parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("export-schema")
     s.add_argument("--out", default="schemas")
+    e = sub.add_parser("evaluate", help="detection metrics of a shadow run against ground-truth labels")
+    e.add_argument("--config", required=True)
+    e.add_argument("--labels", required=True, help="COCO JSON with vad_* fields (see routing.metrics)")
+    e.add_argument("--trace", required=True, help="route_trace.jsonl of the shadow run")
+    e.add_argument("--out", required=True, help="metrics JSON to write")
+    e.add_argument("--iou", type=float, default=0.5, help="working IoU threshold for recall, false positives, misses")
     for name in ("shadow", "legacy"):
         p = sub.add_parser(name)
         p.add_argument("--config", required=True)
@@ -76,6 +83,8 @@ def main(argv: list[str] | None = None) -> int:
         for path in export_json_schemas(args.out):
             print(path)
         return 0
+    if args.cmd == "evaluate":
+        return _run_evaluate(parser, args)
 
     cfg = load_config(args.config)
     out = Path(args.out)
@@ -108,6 +117,26 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("--primary-version is required with --primary-predictions")
     if not args.primary_url and any(remote_flags):
         parser.error("--primary-model-id/--primary-revision/--primary-weights-sha256 are only with --primary-url")
+
+
+def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    task = load_config(args.config).task
+    label_doc = json.loads(Path(args.labels).read_text(encoding="utf-8"))
+    try:
+        ground_truth = load_ground_truth(label_doc, task)
+    except LabelError as e:
+        parser.error(f"--labels: {e}")
+    lines = Path(args.trace).read_text(encoding="utf-8").splitlines()
+    records = [RouteRecord.model_validate_json(line) for line in lines if line.strip()]
+    metrics = {"evidence_status": evidence_status(label_doc),
+               **evaluate(ground_truth, task.class_ids, image_results(records), args.iou),
+               "cost": route_report(records)}
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    print(f"evidence_status: {metrics['evidence_status']}")
+    print(f"metrics written to {out}")
+    return 0
 
 
 def _run_legacy(cfg: RoutingConfig, primary: Detector, entries: list[ManifestEntry], out: Path) -> int:

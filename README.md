@@ -43,7 +43,12 @@ pixi run vad-route shadow --config configs/routing/example.yaml --images path/to
 
 # Legacy primary-only export (what runs when the flag is off)
 pixi run vad-route legacy --config ... --images ... --primary-predictions ... --primary-version ... --out runs/legacy
+
+# Detection metrics of a shadow run against ground-truth labels (see below)
+pixi run vad-route evaluate --config ... --labels gt.json --trace runs/shadow1/route_trace.jsonl --out metrics.json
 ```
+
+**Evaluation.** Labels are COCO JSON plus `vad_*` fields (format in `src/routing/metrics.py`): every image needs `vad_image_id` and `vad_exhaustive: true`; `ignore: true` marks an object that counts neither as found nor missed. `evaluate` reports detector mAP50–95 / mAP50 and recall by class and COCO size, false positives per image and per negative image, precision/recall of the accepted annotations (no scores, so no AP), missed objects split into failed images, images in review and silent misses, and the run's cost. A labelled image without a result is an operational failure with all its objects missed. Its `evidence_status` is `NOT A FINDING` unless the label file declares `"vad_label_provenance": "human"` at the top level; real-image evaluation waits for the human-labelled sample.
 
 PowerShell uses a backtick for line continuation:
 

@@ -239,3 +239,130 @@ def test_map_refuses_unscored_predictions_and_unknown_images():
         mean_average_precision({"i1": [_p(CLASS_A, (0, 0, 50, 50), None)]}, gt, task().class_ids)
     with pytest.raises(LabelError, match="not in the ground truth"):
         mean_average_precision({"zz": [_p(CLASS_A, (0, 0, 50, 50), 0.5)]}, gt, task().class_ids)
+
+
+# --- A3 stage 3: report metrics (hand-computed) and `vad-route evaluate` -------------------------
+
+from routing.metrics import ImageResult, evaluate, evidence_status  # noqa: E402
+
+
+def _report_fixture():
+    gt = _set(["p1", "p2", "neg", "fail"], [
+        ("p1", 1, [0, 0, 40, 40], {}),        # A, area 1600: medium
+        ("p1", 2, [100, 100, 20, 20], {}),    # B, area 400: small, never detected
+        ("p2", 1, [0, 0, 120, 120], {}),      # A, area 14400: large
+        ("fail", 1, [50, 50, 40, 40], {}),    # A, medium; the image has no result (operational failure)
+    ])
+    results = {
+        "p1": ImageResult(detections=(_p(CLASS_A, (0, 0, 40, 40), 0.9), _p(CLASS_A, (150, 150, 190, 190), 0.4)),
+                          accepted=(_p(CLASS_A, (0, 0, 40, 40), None),), flagged_for_review=False),
+        "p2": ImageResult(detections=(_p(CLASS_A, (0, 0, 120, 110), 0.8),), accepted=(), flagged_for_review=True),
+        "neg": ImageResult(detections=(_p(CLASS_B, (10, 10, 30, 30), 0.7),),
+                           accepted=(_p(CLASS_B, (10, 10, 30, 30), None),), flagged_for_review=False),
+        "unl": ImageResult(detections=(), accepted=(), flagged_for_review=False),  # not labelled
+    }
+    return gt, results
+
+
+def test_failed_images_count_as_operational_failures_with_all_ground_truth_missed():
+    gt, results = _report_fixture()
+    out = evaluate(gt, task().class_ids, results)
+    assert out["images"] == {"labelled": 4, "with_result": 3, "negative": 1, "operational_failures": ["fail"],
+                             "unlabelled_results": 1}
+    assert out["accepted_annotations"]["missed_in_failed_images"] == 1
+
+
+def test_detector_recall_by_class_and_size_and_false_positives():
+    gt, results = _report_fixture()
+    det = evaluate(gt, task().class_ids, results)["detector"]
+    assert det["source"] == "primary_candidates"
+    assert det["recall_by_class"] == {CLASS_A: {"found": 2, "boxes": 3, "recall": pytest.approx(2 / 3)},
+                                      CLASS_B: {"found": 0, "boxes": 1, "recall": 0.0}}
+    assert det["recall_by_size"] == {"small": {"found": 0, "boxes": 1, "recall": 0.0},
+                                     "medium": {"found": 1, "boxes": 2, "recall": 0.5},
+                                     "large": {"found": 1, "boxes": 1, "recall": 1.0}}
+    assert det["fp_per_image"] == 0.5 and det["fp_per_negative_image"] == 1.0
+
+
+def test_detector_map_includes_the_failed_image_as_missed_ground_truth():
+    gt, results = _report_fixture()
+    det = evaluate(gt, task().class_ids, results)["detector"]
+    # Class A: TP, TP, FP over 3 boxes -> 67/101 at IoU 0.50-0.90; at 0.95 the second TP fails -> 34/101.
+    assert det["map50_95"] == pytest.approx((9 * 67 / 101 + 34 / 101) / 10 / 2)
+    assert det["map50"] == pytest.approx(67 / 101 / 2)
+
+
+def test_accepted_annotations_get_precision_recall_misses_and_review_coverage():
+    gt, results = _report_fixture()
+    acc = evaluate(gt, task().class_ids, results)["accepted_annotations"]
+    assert acc == {"true_positives": 1, "false_positives": 1, "precision": 0.5, "recall": 0.25, "missed": 3,
+                   "missed_in_failed_images": 1, "missed_in_review": 1, "silent_misses": 1, "review_coverage": 0.5}
+
+
+def test_detector_map_is_unavailable_when_a_detection_has_no_confidence():
+    gt, results = _report_fixture()
+    results["p2"] = ImageResult(detections=(_p(CLASS_A, (0, 0, 120, 110), None),), accepted=(), flagged_for_review=True)
+    det = evaluate(gt, task().class_ids, results)["detector"]
+    assert det["map50_95"] is None and "confidence" in det["map_unavailable"]
+
+
+def test_evidence_status_needs_declared_human_provenance():
+    assert evidence_status({}).startswith("NOT A FINDING")
+    assert evidence_status({"vad_label_provenance": "synthetic"}).startswith("NOT A FINDING")
+    assert evidence_status({"vad_label_provenance": "human"}) == "human labels (declared by vad_label_provenance)"
+
+
+def _labels_for_fixture(fx_root, provenance=None):
+    images = [("easy", 320, 240), ("zero", 320, 240), ("small", 640, 480), ("corrupt", 320, 240)]
+    doc = {"images": [{"id": i + 1, "vad_image_id": n, "width": w, "height": h, "vad_exhaustive": True}
+                      for i, (n, w, h) in enumerate(images)],
+           "categories": [dict(c) for c in CATS],
+           "annotations": [{"id": 1, "image_id": 1, "category_id": 1, "bbox": [60, 60, 100, 100]},
+                           {"id": 2, "image_id": 3, "category_id": 2, "bbox": [300, 200, 8, 8]}]}
+    if provenance:
+        doc["vad_label_provenance"] = provenance
+    path = fx_root / "labels.json"
+    path.write_text(__import__("json").dumps(doc), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize("provenance,status", [(None, "NOT A FINDING"), ("human", "human labels")])
+def test_cli_evaluate_writes_metrics_from_a_shadow_trace(tmp_path, capsys, provenance, status):
+    import json
+
+    from routing import cli
+
+    from .helpers import make_fixture
+    fx = make_fixture(tmp_path / "fx")
+    out = tmp_path / "run"
+    assert cli.main(["shadow", "--config", str(fx["config"]), "--images", str(fx["manifest"]),
+                     "--primary-predictions", str(fx["preds"]), "--primary-version", "prim@1",
+                     "--relevance-scores", str(fx["relevance"]), "--out", str(out)]) == 0
+    capsys.readouterr()
+    metrics = tmp_path / "metrics.json"
+    assert cli.main(["evaluate", "--config", str(fx["config"]), "--labels", str(_labels_for_fixture(fx["root"], provenance)),
+                     "--trace", str(out / "route_trace.jsonl"), "--out", str(metrics)]) == 0
+    doc = json.loads(metrics.read_text(encoding="utf-8"))
+    assert doc["evidence_status"].startswith(status) and status in capsys.readouterr().out
+    assert doc["images"]["operational_failures"] == ["corrupt"]  # the corrupt image produced an ErrorRecord
+    assert doc["detector"]["recall_by_class"][CLASS_A] == {"found": 1, "boxes": 1, "recall": 1.0}
+    assert doc["cost"]["images"] == 3 and doc["iou_threshold"] == 0.5
+
+
+def test_review_coverage_separates_flagged_from_silent_misses():
+    gt = _set(["r", "s"], [("r", 1, [0, 0, 40, 40], {}), ("r", 2, [100, 100, 40, 40], {}), ("s", 1, [0, 0, 40, 40], {})])
+    results = {"r": ImageResult((), (), flagged_for_review=True), "s": ImageResult((), (), flagged_for_review=False)}
+    acc = evaluate(gt, task().class_ids, results)["accepted_annotations"]
+    assert (acc["missed_in_review"], acc["silent_misses"], acc["review_coverage"]) == (2, 1, pytest.approx(2 / 3))
+
+
+def test_size_strata_follow_coco_area_limits():
+    from routing.metrics import _size_stratum
+    assert [_size_stratum((0, 0, w, w)) for w in (31.9, 32, 95.9, 96)] == ["small", "medium", "medium", "large"]
+
+
+def test_ignore_boxes_are_neither_recall_boxes_nor_misses():
+    gt = _set(["g"], [("g", 1, [0, 0, 40, 40], {}), ("g", 1, [100, 100, 40, 40], {"ignore": True})])
+    out = evaluate(gt, task().class_ids, {"g": ImageResult((_p(CLASS_A, (0, 0, 40, 40), 0.9),), (), False)})
+    assert out["detector"]["recall_by_class"][CLASS_A] == {"found": 1, "boxes": 1, "recall": 1.0}
+    assert out["accepted_annotations"]["missed"] == 1  # only the regular box; nothing was accepted
