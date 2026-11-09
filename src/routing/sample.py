@@ -346,9 +346,14 @@ def _boxes_agree(a: GroundTruthImage, b: GroundTruthImage, iou_threshold: float)
     return True
 
 
-def _image_annotations(label_doc: Mapping, image_id: str) -> list[dict]:
+def _image_annotations(label_doc: Mapping, image_id: str, out_ids: Mapping[str, int] | None = None) -> list[dict]:
+    """One image's annotations; with ``out_ids`` (class name -> id), category ids are re-mapped by class name."""
     key = next(img["id"] for img in label_doc["images"] if img["vad_image_id"] == image_id)
-    return [a for a in sorted(label_doc["annotations"], key=lambda a: a["id"]) if a["image_id"] == key]
+    anns = [a for a in sorted(label_doc["annotations"], key=lambda a: a["id"]) if a["image_id"] == key]
+    if out_ids is None:
+        return anns
+    names = {c["id"]: c["name"] for c in label_doc["categories"]}
+    return [{**a, "category_id": out_ids[names[a["category_id"]]]} for a in anns]
 
 
 def merge_reviews(first: Mapping, second: Mapping, queue: Mapping, adjudications: Mapping, task: TaskSpec,
@@ -357,7 +362,9 @@ def merge_reviews(first: Mapping, second: Mapping, queue: Mapping, adjudications
 
     Agreement keeps the first reviewer's boxes. A disagreement needs an adjudication (first or
     second) and keeps the other opinion in ``vad_review.alternative``; unadjudicated
-    disagreements raise :class:`UnresolvedReviews` and nothing is merged.
+    disagreements raise :class:`UnresolvedReviews` and nothing is merged. The passes may number
+    their categories differently: every box is carried over by class name into the first pass's
+    category ids. A queued image must have the same size in both passes.
     """
     if queue.get("version") != "review-queue-v1":
         raise SampleError("--queue must be a review-queue-v1 file from `vad-route sample review-queue`")
@@ -372,6 +379,8 @@ def merge_reviews(first: Mapping, second: Mapping, queue: Mapping, adjudications
     if adjudications and adjudications.get("vad_adjudications") != 1:
         raise SampleError("the adjudications file must declare vad_adjudications: 1")
     decisions = dict(adjudications.get("decisions", {}))
+    # Each pass numbers its categories itself: carry boxes over by class name into the first pass's ids.
+    out_ids = {c["name"]: c["id"] for c in first["categories"]}
 
     reviews, disagreements = {}, []
     for image_id in sorted(first_gt):
@@ -382,6 +391,9 @@ def merge_reviews(first: Mapping, second: Mapping, queue: Mapping, adjudications
             if len(second_gt[image_id].reviewers) != 1:
                 raise SampleError(f"second-pass image {image_id!r} needs exactly one reviewer in vad_reviewers")
             second_by = _check_handle(second_gt[image_id].reviewers[0], "second")
+            sizes = [f"{gt[image_id].width}x{gt[image_id].height}" for gt in (first_gt, second_gt)]
+            if sizes[0] != sizes[1]:
+                raise SampleError(f"image {image_id!r} is {sizes[0]} in the first pass but {sizes[1]} in the second")
             if second_by.casefold() == review["first"].casefold():
                 raise SampleError(f"image {image_id!r}: the second reviewer must differ from the first reviewer")
             agree = _boxes_agree(first_gt[image_id], second_gt[image_id], iou_threshold)
@@ -395,11 +407,11 @@ def merge_reviews(first: Mapping, second: Mapping, queue: Mapping, adjudications
                                   adjudicator=_check_handle(decision.get("adjudicator"), "adjudicating"))
                     other = second if decision["decision"] == "first" else first
                     review["alternative"] = [{k: a[k] for k in ("category_id", "bbox", "ignore", "iscrowd") if k in a}
-                                             for a in _image_annotations(other, image_id)]
+                                             for a in _image_annotations(other, image_id, out_ids)]
                 disagreements.append({"image_id": image_id, "first": review["first"], "second": second_by,
                                       "decision": review["decision"],
-                                      "first_annotations": _image_annotations(first, image_id),
-                                      "second_annotations": _image_annotations(second, image_id)})
+                                      "first_annotations": _image_annotations(first, image_id, out_ids),
+                                      "second_annotations": _image_annotations(second, image_id, out_ids)})
         reviews[image_id] = review
     if decisions:
         raise SampleError(f"adjudications for images without a disagreement: {sorted(decisions)[:5]}")
@@ -412,7 +424,7 @@ def merge_reviews(first: Mapping, second: Mapping, queue: Mapping, adjudications
         source = second if review["decision"] == "second" else first
         images.append({**image, "vad_reviewers": [r for r in (review["first"], review["second"]) if r],
                        "vad_review": review})
-        for ann in _image_annotations(source, image_id):
+        for ann in _image_annotations(source, image_id, out_ids):
             annotations.append({**ann, "id": len(annotations) + 1, "image_id": image["id"]})
     provenance = first.get("vad_label_provenance")
     merged = {"vad_label_provenance": provenance if provenance == second.get("vad_label_provenance") else "mixed",

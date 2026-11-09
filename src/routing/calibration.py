@@ -134,7 +134,12 @@ _WEMM = re.compile(r"wemm:(.+)@([^+]+)\+max(\d+)")
 
 
 class FittedRelevanceCalibrator:
-    """A RelevanceCalibrator loaded from a `vad-route fit-relevance` artifact."""
+    """A RelevanceCalibrator loaded from a `vad-route fit-relevance` artifact.
+
+    The scorer must match exactly. A calibrator fitted under a WeMM "@unverified" build therefore
+    loads for another "@unverified" run, which does not prove the same build; requiring a verified
+    build is a promotion gate (project board), not a load rule.
+    """
 
     def __init__(self, artifact: RelevanceCalibratorArtifact, file_sha256: str):
         self.artifact = artifact

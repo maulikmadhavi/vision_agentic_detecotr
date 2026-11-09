@@ -58,6 +58,13 @@ def _broken(mutate):
     ("annotation with unknown category", lambda d: d["annotations"][0].update(category_id=7), "category"),
     ("zero-width box", lambda d: d["annotations"][0].update(bbox=[10, 20, 0, 40]), "bbox"),
     ("box outside the image", lambda d: d["annotations"][0].update(bbox=[80, 20, 30, 40]), "bbox"),
+    # R5-4: numeric ids are lookup keys, so a repeat would merge images or reassign boxes silently
+    ("two images share a numeric id", lambda d: d["images"][1].update(id=1), "duplicate image id 1"),
+    ("two categories share a numeric id", lambda d: d["categories"][1].update(id=1), "duplicate category id 1"),
+    ("one class under two category ids", lambda d: d["categories"].append({"id": 3, "name": CLASS_A}),
+     f"category name '{CLASS_A}'.*ids 1 and 3"),
+    ("two annotations share an id", lambda d: d["annotations"].append(_ann(1, 2, 2, [5, 5, 5, 5])),
+     "duplicate annotation id 1"),
 ])
 def test_loader_rejects_invalid_label_files(name, mutate, match):
     with pytest.raises(LabelError, match=match):

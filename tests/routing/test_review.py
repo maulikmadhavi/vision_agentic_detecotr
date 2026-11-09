@@ -133,6 +133,64 @@ def test_an_adjudicated_disagreement_keeps_both_opinions():
     assert [(a["category_id"], a["bbox"]) for a in img["vad_review"]["alternative"]] == first_opinion
 
 
+def _renumber(doc, ids):
+    """The same labels under other numeric category ids ({class name: new id}), as another tool might export."""
+    old = {c["id"]: c["name"] for c in doc["categories"]}
+    return {**doc, "categories": [{"id": ids[c["name"]], "name": c["name"]} for c in doc["categories"]],
+            "annotations": [{**a, "category_id": ids[old[a["category_id"]]]} for a in doc["annotations"]]}
+
+
+def _classes_and_boxes(doc, image_id):
+    gt = load_ground_truth(doc, task())[image_id]
+    return [(b.class_id, b.box_xyxy) for b in gt.boxes]
+
+
+@pytest.mark.parametrize("ids", [{CLASS_A: 2, CLASS_B: 1}, {CLASS_A: 7, CLASS_B: 8}], ids=["swapped", "disjoint"])
+def test_the_chosen_second_opinion_keeps_its_class_under_other_category_ids(ids):
+    labels, groups = _first()
+    queue = review_queue(labels, groups, task(), seed=5)
+    target = _queue_ids(queue)[0]
+    second = _second(labels, _queue_ids(queue), change={target: [(2, [50, 50, 20, 20])]})  # class B in pass 2
+    adjudications = {"vad_adjudications": 1, "decisions": {target: {"decision": "second", "adjudicator": "cleo"}}}
+    merged, _ = merge_reviews(labels, _renumber(second, ids), queue, adjudications, task())
+    assert _classes_and_boxes(merged, target) == [(CLASS_B, (50, 50, 70, 70))]
+
+
+@pytest.mark.parametrize("ids", [{CLASS_A: 2, CLASS_B: 1}, {CLASS_A: 7, CLASS_B: 8}], ids=["swapped", "disjoint"])
+def test_the_kept_alternative_opinion_uses_the_merged_category_ids(ids):
+    labels, groups = _first()
+    queue = review_queue(labels, groups, task(), seed=5)
+    target = _queue_ids(queue)[0]
+    second = _second(labels, _queue_ids(queue), change={target: [(2, [50, 50, 20, 20])]})
+    adjudications = {"vad_adjudications": 1, "decisions": {target: {"decision": "first", "adjudicator": "cleo"}}}
+    merged, disagreements = merge_reviews(labels, _renumber(second, ids), queue, adjudications, task())
+    names = {c["id"]: c["name"] for c in merged["categories"]}
+    img = next(i for i in merged["images"] if i["vad_image_id"] == target)
+    assert [(names[a["category_id"]], a["bbox"]) for a in img["vad_review"]["alternative"]] == \
+        [(CLASS_B, [50, 50, 20, 20])]
+    # the disagreement report uses the same (merged) category ids for both passes
+    assert [names[a["category_id"]] for a in disagreements[0]["second_annotations"]] == [CLASS_B]
+
+
+def test_the_first_pass_may_use_other_ids_than_the_second_and_agreement_still_counts():
+    labels, groups = _first()
+    queue = review_queue(labels, groups, task(), seed=5)
+    second = _renumber(_second(labels, _queue_ids(queue)), {CLASS_A: 2, CLASS_B: 1})
+    merged, disagreements = merge_reviews(labels, second, queue, {}, task())
+    assert disagreements == [] and len(load_ground_truth(merged, task())) == 20
+
+
+@pytest.mark.parametrize("side, size", [("width", "120x100"), ("height", "100x120")])
+def test_merge_refuses_passes_that_disagree_on_image_size(side, size):
+    labels, groups = _first()
+    queue = review_queue(labels, groups, task(), seed=5)
+    target = _queue_ids(queue)[0]
+    second = _second(labels, _queue_ids(queue))
+    next(i for i in second["images"] if i["vad_image_id"] == target)[side] = 120
+    with pytest.raises(SampleError, match=f"{target}.*100x100.*{size}"):
+        merge_reviews(labels, second, queue, {}, task())
+
+
 def test_boxes_that_overlap_enough_count_as_agreement():
     labels, groups = _first()
     queue = review_queue(labels, groups, task(), seed=5)

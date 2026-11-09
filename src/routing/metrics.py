@@ -20,6 +20,7 @@ blocked until the labelled sample (and permission to use its images) exists.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -73,6 +74,15 @@ class ImageMatch:
 
 def load_ground_truth(doc: Mapping, task: TaskSpec) -> dict[str, GroundTruthImage]:
     """Validate a COCO + vad_* label document and return ground truth by manifest image id."""
+    # Numeric ids are lookup keys: a repeat would merge two images or move a box silently.
+    for kind, rows in (("image", doc["images"]), ("category", doc["categories"]), ("annotation", doc["annotations"])):
+        if dup := next((i for i, n in Counter(r.get("id") for r in rows).items() if n > 1), None):
+            raise LabelError(f"duplicate {kind} id {dup!r}; every {kind} needs its own numeric id")
+    by_name: dict[str, list] = {}
+    for c in doc["categories"]:
+        by_name.setdefault(c["name"], []).append(c["id"])
+    if ambiguous := next(((n, ids) for n, ids in by_name.items() if len(ids) > 1), None):
+        raise LabelError(f"category name {ambiguous[0]!r} is used by ids {' and '.join(map(str, ambiguous[1]))}")
     names = {c["id"]: c["name"] for c in doc["categories"]}
     if unknown := sorted(set(names.values()) - set(task.class_ids)):
         raise LabelError(f"label categories not in the task: {unknown}")
