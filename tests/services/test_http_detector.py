@@ -11,9 +11,11 @@ import httpx
 import pytest
 from PIL import Image
 
-from routing.adapters import RawDetection
-from routing.pipeline import ManifestEntry, RouteStore, RoutingPipeline
-from services.remote_adapters import RemoteDetector, RemoteDetectorError
+from routing.interfaces import RawDetection
+from routing.image_inputs import ManifestEntry
+from routing.pipeline import RoutingPipeline
+from routing.store import RouteStore
+from services.http_detector import RemoteDetector, RemoteDetectorError
 from routing.schemas import ErrorRecord, RouteRecord
 from routing.slicing import run_sliced
 from routing.task_config import SlicingConfig
@@ -138,7 +140,7 @@ def test_sahi_tiles_are_offset_once_into_original_pixels(tmp_path):
         return ok(body, img, [{"class_id": d.class_id, "box_xyxy": list(d.box_xyxy), "score": 0.9} for d in found])
 
     path = draw(tmp_path / "big.png", (1200, 900), [(CLASS_A, (700, 500, 740, 540))])
-    from routing.pipeline import load_image
+    from routing.image_inputs import load_image
     image, ref = load_image(ManifestEntry(str(path), image_id="big"))
     calls = []
     res = run_sliced(detector(server(reply, calls)), image, ref, task().class_ids,
@@ -149,7 +151,7 @@ def test_sahi_tiles_are_offset_once_into_original_pixels(tmp_path):
 
 def test_model_revision_is_part_of_the_record_key(tmp_path):
     entry = ManifestEntry(str(draw(tmp_path / "a.png", (320, 240), [])), image_id="a")
-    from routing.pipeline import load_image
+    from routing.image_inputs import load_image
     _, ref = load_image(entry)
     keys = {RoutingPipeline(config(), detector(None, model_revision=r), RouteStore(":memory:")).record_key(ref)
             for r in ("rev-1", "rev-2")}

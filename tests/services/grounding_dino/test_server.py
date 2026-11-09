@@ -17,7 +17,7 @@ import io
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from services.service_contracts import DetectClass, DetectRequest, DetectResponse
+from services.contracts import DetectClass, DetectRequest, DetectResponse
 
 from services.grounding_dino import server
 

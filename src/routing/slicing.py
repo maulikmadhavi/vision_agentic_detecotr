@@ -12,7 +12,8 @@ from dataclasses import dataclass
 
 from PIL import Image
 
-from .adapters import Detector, to_detections
+from .detection_mapping import to_detections
+from .interfaces import Detector
 from .matching import canonical_key, ios
 from .schemas import Detection, ImageRef, stable_id
 from .task_config import SlicingConfig

@@ -12,7 +12,7 @@ import pytest
 from PIL import Image, ImageDraw
 
 from routing.matching import iou
-from services.remote_adapters import RemoteDetector
+from services.http_detector import RemoteDetector
 from routing.schemas import ClassSpec, TaskSpec
 
 pytestmark = pytest.mark.gdino

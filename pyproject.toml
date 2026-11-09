@@ -14,7 +14,7 @@ dependencies = [
 [project.optional-dependencies]
 # Slicing is native (src/routing/slicing.py); nothing imports the SAHI package, so
 # there is no SAHI extra to pin. Add one with an exact pin if a SAHI bridge is written.
-# Live Stage A relevance (services.embedder.OpenClipRelevance). The pixi `clip` environment pulls
+# Live Stage A relevance (services.open_clip.OpenClipRelevanceScorer). The pixi `clip` environment pulls
 # torch from the CUDA 12.8 index (see [tool.pixi.feature.clip]).
 clip = ["open_clip_torch>=4.2,<5", "torch>=2.11,<3"]
 dev = ["pytest>=8"]

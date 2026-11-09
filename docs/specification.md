@@ -56,19 +56,21 @@ src/routing/
   schemas.py       Pydantic v2 records + JSON Schema export
   task_config.py   class registry, prompts, thresholds, budgets, policy knobs, versions
   scoring.py       Stage A and Stage B feature extraction
-  adapters.py      detector / relevance / VLM protocols; precomputed + LM Studio adapters
+  interfaces.py    detector / relevance / VLM protocols and result types
+  detection_mapping.py, verification_results.py  box mapping; VLM result parsing
   slicing.py       native SAHI-style tiling and original-coordinate conversion
   matching.py      class-aware matching, deduplication, provenance-preserving fusion
   policy.py        pure deterministic route function
   completeness.py  unmatched proposals and coverage audit
-  pipeline.py      bounded orchestration, persistence, resumability, job lock
+  pipeline.py      bounded orchestration and resumability
+  store.py, image_inputs.py  persistence + job lock; manifest/image loading
   evaluation.py    isolation, frozen lock, route/cost report, VLM agreement
   export.py        COCO-style versioned export + loader
   cli.py           vad-route
 src/services/
-  service_contracts.py  svc-1.0 detector wire models
-  remote_adapters.py    remote detector and relevance-scorer clients
-  embedder.py           optional open_clip scorer + CUDA-event timer
+  contracts.py          svc-1.0 detector wire models
+  http_detector.py, wemm_mcp.py, lmstudio.py  detector, relevance and VLM clients
+  replay.py, open_clip.py, runtime.py  replay adapters; optional local scorer; shared helpers
   grounding_dino/       detector server (own environment)
 configs/routing/example.yaml
 tests/routing/, tests/services/

@@ -17,7 +17,7 @@ from .schemas import Strict, TaskSpec, canonical_json
 
 class RelevanceThresholds(Strict):
     # Raw-similarity bands are only meaningful on the scorer's own scale. A scorer that
-    # declares ``score_scale`` (e.g. embedder.OpenClipRelevance) is refused unless
+    # declares ``score_scale`` (e.g. services.open_clip.OpenClipRelevanceScorer) is refused unless
     # ``raw_scale`` names the same scale, so bands tuned for one scale never apply to another.
     raw_scale: str = "unspecified"
     raw_high: float = 0.5

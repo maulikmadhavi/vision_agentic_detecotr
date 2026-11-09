@@ -107,19 +107,27 @@ src/routing/        package `routing`: routing logic (imports no server code)
   schemas.py       Pydantic v2 contracts + JSON Schema export
   task_config.py   class registry, thresholds, budgets, feature flag, config hash
   scoring.py       Stage A (quality, relevance) and Stage B (box features, difficulty)
-  adapters.py      Detector / relevance / VLM protocols; precomputed + LM Studio adapters
+  interfaces.py    Detector / RelevanceScorer / VLMVerifier protocols and result types
+  detection_mapping.py   raw boxes -> validated original-image detections
+  verification_results.py  uncertain-result builder + VLM answer parser
   slicing.py       SAHI-style tiling, original-coordinate mapping, IoS union merge
   matching.py      class-aware matching, directional disagreement, provenance-preserving fusion
   policy.py        pure deterministic route-v1
   completeness.py  annotation completeness audit
-  pipeline.py      bounded, resumable orchestration (SQLite)
+  pipeline.py      bounded, resumable orchestration
+  store.py         SQLite step/record/error store + per-output-dir job lock
+  image_inputs.py  manifest + validated image loading
   evaluation.py    split isolation, frozen-set lock, route/cost report
   export.py        COCO-style versioned export + loader
   cli.py           vad-route
 src/services/       package `services`: model-service clients and servers
-  service_contracts.py  svc-1.0 wire models (detector server <-> client)
-  remote_adapters.py    RemoteDetector (HTTP) + WeMM MCP relevance scorer
-  embedder.py           optional open_clip scorer (not used for now) + CUDA-event timer
+  contracts.py      svc-1.0 wire models (detector server <-> client)
+  http_detector.py  RemoteDetector (svc-1.0 HTTP client)
+  wemm_mcp.py       WeMMMCPRelevanceScorer (WeMM MCP relevance client)
+  lmstudio.py       LMStudioVerifier (VLM verifier client)
+  replay.py         precomputed detections / relevance from JSONL
+  open_clip.py      OpenClipRelevanceScorer (not used for now)
+  runtime.py        file hashing + measured GPU time helpers
   grounding_dino/       Grounding DINO server; own pixi workspace (see its README.md)
 tests/routing/, tests/services/
 ```

@@ -10,8 +10,10 @@ import httpx
 import pytest
 from PIL import Image
 
-from routing.pipeline import ManifestEntry, RouteStore, RoutingPipeline
-from services.remote_adapters import RemoteScorerError, WeMMMCPRelevanceScorer
+from routing.image_inputs import ManifestEntry
+from routing.pipeline import RoutingPipeline
+from routing.store import RouteStore
+from services.wemm_mcp import RemoteScorerError, WeMMMCPRelevanceScorer
 from routing.schemas import RouteRecord
 
 from ..routing.helpers import CLASS_A, CLASS_B, ScriptedDetector, config, draw
@@ -203,18 +205,17 @@ def test_cli_wemm_scores_stage_a(tmp_path, monkeypatch):
     assert all(t["stage_a"]["per_class"][CLASS_A]["raw_similarity"] == 0.4 for t in trace) and calls
 
 
-def test_rename_keeps_run_keys_and_old_name_alias():
-    # Golden key computed with the class under its previous name (RemoteRelevanceScorer):
-    # the rename must not change model_version, RunInfo or the record key.
-    from services import remote_adapters
-    from services.remote_adapters import WeMMMCPRelevanceScorer
+def test_rename_keeps_run_keys():
+    # Golden key computed with the class under its first name (RemoteRelevanceScorer in
+    # vad.routing.remote_adapters): renames and module moves must not change model_version,
+    # RunInfo or the record key. The old-name alias was dropped in the restructure.
     from routing.schemas import ImageRef
+    from services.wemm_mcp import WeMMMCPRelevanceScorer
 
     ref = ImageRef(id="a", uri="a.png", width=320, height=240, sha256="0" * 64)
     pipe = RoutingPipeline(config(relevance=WEMM_CFG), ScriptedDetector({}), RouteStore(":memory:"),
                            relevance=WeMMMCPRelevanceScorer(url=URL))
     assert pipe.record_key(ref) == "rec-e025bfad645c479b"
-    assert remote_adapters.RemoteRelevanceScorer is WeMMMCPRelevanceScorer
 
 
 # --- Stage F: a run where the scorer failed must say so ------------------------------------------

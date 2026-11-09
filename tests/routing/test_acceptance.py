@@ -12,11 +12,14 @@ import httpx
 import pytest
 
 from routing import cli
-from routing.adapters import LMStudioVLM, RawDetection
+from routing.interfaces import RawDetection
+from services.lmstudio import LMStudioVerifier
 from routing.evaluation import IsolationError, assert_not_frozen, check_isolation, load_frozen, lock_frozen_set
 from routing.export import load_annotations
 from routing.matching import iou
-from routing.pipeline import ManifestEntry, RouteStore, RoutingPipeline
+from routing.image_inputs import ManifestEntry
+from routing.pipeline import RoutingPipeline
+from routing.store import RouteStore
 from routing.schemas import VerificationRequest
 from routing.slicing import run_sliced, tile_grid
 from routing.task_config import SlicingConfig
@@ -145,8 +148,10 @@ import json, sys
 sys.path.insert(0, sys.argv[2])
 from pathlib import Path
 from tests.routing.helpers import make_fixture, config, BlobDetector, ScriptedRelevance
-from routing.adapters import PrecomputedDetector, PrecomputedRelevance
-from routing.pipeline import RouteStore, RoutingPipeline, load_manifest
+from services.replay import PrecomputedDetector, PrecomputedRelevance
+from routing.image_inputs import load_manifest
+from routing.pipeline import RoutingPipeline
+from routing.store import RouteStore
 from routing.policy import stable_sample
 fx = make_fixture(Path(sys.argv[1]) / "fx")
 cfg = config(audit={"low_relevance_sample_rate": 0.5, "zero_box_sample_rate": 0.5})
@@ -234,7 +239,7 @@ def test_no_secondary_marks_disagreement_unavailable(tmp_path):
 
 def test_sahi_tile_edge_and_overlap_map_once_and_dedupe(tmp_path):
     from PIL import Image
-    from routing.pipeline import load_image
+    from routing.image_inputs import load_image
     cfg = SlicingConfig(tile=400, overlap=0.25, include_full_image=False, merge_ios=0.5)
     truth = [
         (CLASS_A, (310, 120, 380, 180)),   # wholly inside the 300..400 x-overlap: seen by two tiles
@@ -259,7 +264,7 @@ def test_sahi_tile_edge_and_overlap_map_once_and_dedupe(tmp_path):
 
 
 def test_sahi_cut_object_is_reassembled_by_full_image_pass(tmp_path):
-    from routing.pipeline import load_image
+    from routing.image_inputs import load_image
     cfg = SlicingConfig(tile=400, overlap=0.1, include_full_image=True)
     truth = [(CLASS_A, (250, 100, 550, 200))]  # wider than the overlap: cut by every tile
     entry = ManifestEntry(str(draw(tmp_path / "wide.png", (1000, 400), truth)), image_id="wide")
@@ -295,7 +300,7 @@ def _vlm_with(handler):
         calls.append(request)
         return handler(request)
 
-    return LMStudioVLM(transport=httpx.MockTransport(h), timeout_s=1), calls
+    return LMStudioVerifier(transport=httpx.MockTransport(h), timeout_s=1), calls
 
 
 def _chat(content):
@@ -733,7 +738,7 @@ def test_r4_sahi_gpu_budget_enforced_per_tile(tmp_path):
 
 
 def test_r4_sahi_slice_cap_enforced_during_tiling():
-    from routing.pipeline import load_image  # noqa: F401  (import check only)
+    from routing.image_inputs import load_image  # noqa: F401  (import check only)
     from PIL import Image
     from routing.schemas import ImageRef
     img = Image.new("RGB", (640, 320), (200, 200, 200))
@@ -791,7 +796,7 @@ def test_r2_explicit_empty_row_is_a_valid_zero_box_result(tmp_path):
     ([{"image_id": "a", "detections": []}, {"image_id": "a", "detections": []}], "duplicate image_id"),
 ])
 def test_r2_precomputed_rows_must_be_explicit_and_unique(tmp_path, rows, match):
-    from routing.adapters import PrecomputedDetector
+    from services.replay import PrecomputedDetector
     p = tmp_path / "p.jsonl"
     p.write_text("".join(json.dumps(r) + "\n" for r in rows))
     with pytest.raises(ValueError, match=match):
@@ -799,7 +804,7 @@ def test_r2_precomputed_rows_must_be_explicit_and_unique(tmp_path, rows, match):
 
 
 def test_r2_changed_precomputed_file_with_same_version_does_not_reuse_records(tmp_path):
-    from routing.adapters import PrecomputedDetector
+    from services.replay import PrecomputedDetector
     entry = _img(tmp_path)
     preds = tmp_path / "preds.jsonl"
     store_path = tmp_path / "routes.sqlite"

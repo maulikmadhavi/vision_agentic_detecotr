@@ -14,11 +14,15 @@ import os
 import sys
 from pathlib import Path
 
-from .adapters import LMStudioVLM, PrecomputedDetector, PrecomputedRelevance
+from services.lmstudio import LMStudioVerifier
+from services.replay import PrecomputedDetector, PrecomputedRelevance
 from .evaluation import route_report
 from .export import export_legacy, export_routed
-from .pipeline import RouteStore, RoutingPipeline, StoreLockedError, job_lock, load_image, load_manifest
-from services.remote_adapters import WEMM_TEXT_SCALE, RemoteDetector, WeMMMCPRelevanceScorer
+from .image_inputs import load_image, load_manifest
+from .pipeline import RoutingPipeline
+from .store import RouteStore, StoreLockedError, job_lock
+from services.http_detector import RemoteDetector
+from services.wemm_mcp import WEMM_TEXT_SCALE, WeMMMCPRelevanceScorer
 from .schemas import ErrorRecord, RouteRecord, export_json_schemas
 from .task_config import load_config
 
@@ -116,10 +120,10 @@ def main(argv: list[str] | None = None) -> int:
                  if args.secondary_predictions else None)
     relevance = PrecomputedRelevance(args.relevance_scores, args.relevance_version) if args.relevance_scores else None
     if args.clip_weights:
-        from services.embedder import SCORE_SCALE, OpenClipRelevance
+        from services.open_clip import OpenClipRelevanceScorer, SCORE_SCALE
         if cfg.relevance.raw_scale != SCORE_SCALE:
             parser.error(f"--clip-weights needs relevance.raw_scale: {SCORE_SCALE} (with bands chosen for that scale)")
-        relevance = OpenClipRelevance(args.clip_weights, args.clip_arch)
+        relevance = OpenClipRelevanceScorer(args.clip_weights, args.clip_arch)
     if args.wemm:
         url = os.environ.get("VAD_WEMM_URL")
         if not url:
@@ -129,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
                          "(with bands chosen for that scale)")
         relevance = WeMMMCPRelevanceScorer(url=url, model=args.wemm_model, dim=args.wemm_dim, build=args.wemm_build,
                                           max_side=args.wemm_max_side)
-    vlm = LMStudioVLM(cfg.vlm.base_url, cfg.vlm.model, cfg.vlm.timeout_s, cfg.vlm.max_tokens,
+    vlm = LMStudioVerifier(cfg.vlm.base_url, cfg.vlm.model, cfg.vlm.timeout_s, cfg.vlm.max_tokens,
                       cfg.vlm.crop_padding) if cfg.vlm.enabled else None
     try:
         with job_lock(out):

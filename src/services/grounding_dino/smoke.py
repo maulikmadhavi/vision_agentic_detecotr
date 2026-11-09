@@ -20,7 +20,7 @@ from PIL import Image, ImageDraw
 
 import server
 from routing.matching import iou
-from services.service_contracts import DetectClass, DetectRequest, DetectResponse
+from services.contracts import DetectClass, DetectRequest, DetectResponse
 
 SQUARE = (100, 80, 200, 160)
 CLASSES = (DetectClass(class_id="blue_square", prompts=("a blue square",)),

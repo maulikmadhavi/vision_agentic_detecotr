@@ -5,9 +5,11 @@ from __future__ import annotations
 import pytest
 
 from routing import cli
-from routing.adapters import RawDetection
+from routing.interfaces import RawDetection
 from routing.evaluation import HumanLabel, verification_items, vlm_agreement
-from routing.pipeline import ManifestEntry, RouteStore, RoutingPipeline, StoreLockedError, job_lock
+from routing.image_inputs import ManifestEntry
+from routing.pipeline import RoutingPipeline
+from routing.store import RouteStore, StoreLockedError, job_lock
 from routing.policy import Capabilities, route
 from routing.schemas import BoxFeatures, ClassRelevance, Difficulty, Quality, StageA, VerificationResult
 
@@ -190,7 +192,7 @@ def test_core_package_imports_without_torch():
     import subprocess
     import sys
     code = ("import sys; sys.modules['torch'] = None; sys.modules['open_clip'] = None; "
-            "import routing.cli, routing.pipeline, services.embedder")
+            "import routing.cli, routing.pipeline, services.open_clip")
     assert subprocess.run([sys.executable, "-c", code]).returncode == 0
 
 

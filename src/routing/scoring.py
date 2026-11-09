@@ -12,7 +12,7 @@ from collections.abc import Sequence
 import numpy as np
 from PIL import Image
 
-from .adapters import RelevanceCalibrator, RelevanceScorer
+from .interfaces import RelevanceCalibrator, RelevanceScorer
 from .matching import iou
 from .schemas import BoxFeatures, ClassRelevance, Detection, Difficulty, Disagreement, ImageRef, Quality, StageA
 from .task_config import RoutingConfig

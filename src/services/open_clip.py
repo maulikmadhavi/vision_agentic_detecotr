@@ -22,13 +22,17 @@ from __future__ import annotations
 
 import hashlib
 import time
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Mapping
 from pathlib import Path
 
 from PIL import Image
 
+from .runtime import cuda_timer, file_sha256
+
+
 SCORE_SCALE = "clip_prompt_softmax_v1"
+
+
 BACKGROUND_PROMPTS: tuple[str, ...] = (
     "a photo of an empty scene",
     "a photo of something else",
@@ -37,44 +41,7 @@ BACKGROUND_PROMPTS: tuple[str, ...] = (
 )
 
 
-def file_sha256(path: str | Path, chunk: int = 1 << 20) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        while block := f.read(chunk):
-            h.update(block)
-    return h.hexdigest()
-
-
-class GpuTimer:
-    """Measured device time for a block: CUDA events on GPU, ``None`` on CPU.
-
-    ``ms`` is ``None`` when nothing was measured, so the pipeline's GPU budget is
-    only ever enforced against real measurements (wall time is not a proxy; the
-    elapsed-time cap covers wall time).
-    """
-
-    ms: float | None = None
-
-
-@contextmanager
-def cuda_timer(device: str) -> Iterator[GpuTimer]:
-    timer = GpuTimer()
-    if not str(device).startswith("cuda"):
-        yield timer
-        return
-    import torch
-
-    start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
-    start.record()
-    try:
-        yield timer
-    finally:
-        end.record()
-        torch.cuda.synchronize()
-        timer.ms = round(float(start.elapsed_time(end)), 3)
-
-
-class OpenClipRelevance:
+class OpenClipRelevanceScorer:
     """Per-class prompt-contrast relevance from a local open_clip checkpoint.
 
     ``weights`` must be a local file (no network). ``artifact_digest`` is the

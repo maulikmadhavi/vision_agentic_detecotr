@@ -9,7 +9,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw
 
-from routing.adapters import DetectorResult, RawDetection, uncertain
+from routing.interfaces import DetectorResult, RawDetection
+from routing.verification_results import uncertain
 from routing.schemas import ClassSpec, TaskSpec, VerificationResult
 from routing.task_config import RoutingConfig
 

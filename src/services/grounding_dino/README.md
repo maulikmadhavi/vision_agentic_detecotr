@@ -1,7 +1,7 @@
 # Model services
 
 Separately run model servers that the router calls over HTTP (svc-1.0 contract in
-`src/services/service_contracts.py`). Each server has its own pixi workspace and lock; the
+`src/services/contracts.py`). Each server has its own pixi workspace and lock; the
 root `pyproject.toml` / `pixi.lock` are not involved, and the `routing` package never imports
 server code. Servers bind to `127.0.0.1` by default, so images stay on this machine.
 

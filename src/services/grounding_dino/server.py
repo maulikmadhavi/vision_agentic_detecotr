@@ -1,4 +1,4 @@
-"""Grounding DINO detector server speaking svc-1.0 (see src/services/service_contracts.py).
+"""Grounding DINO detector server speaking svc-1.0 (see src/services/contracts.py).
 
 One forward pass per requested class, prompted only with that class's prompts, so
 every returned box belongs to that class. This avoids mapping Grounding DINO's
@@ -21,7 +21,7 @@ from collections.abc import Callable, Sequence
 from fastapi import FastAPI
 from PIL import Image
 
-from services.service_contracts import DetectClass, DetectRequest, DetectResponse, ServedBox
+from services.contracts import DetectClass, DetectRequest, DetectResponse, ServedBox
 
 MODEL_ID = "grounding-dino-tiny"
 HF_REPO = "IDEA-Research/grounding-dino-tiny"
@@ -90,7 +90,7 @@ def load_hf(device: str | None = None) -> tuple[Predict, str]:
     from huggingface_hub import hf_hub_download
     from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
 
-    from services.embedder import cuda_timer, file_sha256
+    from services.runtime import cuda_timer, file_sha256
 
     weights = hf_hub_download(HF_REPO, "model.safetensors", revision=HF_REVISION, local_files_only=True)
     digest = file_sha256(weights)

@@ -8,8 +8,10 @@ import pytest
 import yaml
 
 from routing import cli
-from routing.adapters import RawDetection
-from routing.pipeline import ManifestEntry, RouteStore, RoutingPipeline
+from routing.interfaces import RawDetection
+from routing.image_inputs import ManifestEntry
+from routing.pipeline import RoutingPipeline
+from routing.store import RouteStore
 
 from .helpers import CLASS_A, CLASS_B, FakeVLM, ScriptedDetector, ScriptedRelevance, config, draw, make_fixture
 

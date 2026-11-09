@@ -28,12 +28,14 @@ def _weights() -> Path:
 
 def test_open_clip_scorer_separates_present_from_absent(tmp_path):
     pytest.importorskip("open_clip")
-    from services.embedder import SCORE_SCALE, OpenClipRelevance
-    from routing.pipeline import ManifestEntry, RouteStore, RoutingPipeline
+    from services.open_clip import OpenClipRelevanceScorer, SCORE_SCALE
+    from routing.image_inputs import ManifestEntry
+    from routing.pipeline import RoutingPipeline
+    from routing.store import RouteStore
 
-    from .helpers import ScriptedDetector, config
+    from ..routing.helpers import ScriptedDetector, config
 
-    scorer = OpenClipRelevance(_weights())
+    scorer = OpenClipRelevanceScorer(_weights())
     im = Image.new("RGB", (320, 240), "white")
     ImageDraw.Draw(im).rectangle([100, 80, 200, 160], fill=(0, 0, 255))
     prompts = {"blue_square": (("a blue square",), ("a red circle",)),
