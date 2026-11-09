@@ -231,6 +231,25 @@ class ImageResult:
     detections: tuple[Prediction, ...]  # scored detector output (primary candidates)
     accepted: tuple[Prediction, ...]    # accepted annotations; no scores
     flagged_for_review: bool            # completeness is not "complete": a human will look at it
+    routed: tuple[tuple[Prediction, str], ...] = ()  # unrejected final candidates (routed-score-v1), with status
+
+
+ROUTED_RULE = ("routed-score-v1: every final candidate that is not rejected, scored with the highest raw_confidence "
+               "among its own source detections; a VLM verdict never changes a score (it can only reject); a "
+               "candidate without a scored source is left out of AP and counted as unscored_routed")
+ROUTED_VARIANTS = (("all_unrejected", ("accepted", "candidate", "needs_review")),
+                   ("accepted_only", ("accepted",)))  # candidate and needs_review are both still unverified
+
+
+def _routed(record) -> tuple[tuple[Prediction, str], ...]:
+    confidence = {d.id: d.raw_confidence
+                  for d in (*record.primary_candidates, *record.secondary_candidates, *record.sahi_candidates)}
+    out = []
+    for c in record.final_candidates:
+        if c.status != "rejected":
+            scores = [confidence[s] for s in c.source_ids if confidence.get(s) is not None]
+            out.append((Prediction(c.class_id, c.box_xyxy, max(scores) if scores else None), c.status))
+    return tuple(out)
 
 
 def image_results(records: Sequence) -> dict[str, ImageResult]:
@@ -241,7 +260,7 @@ def image_results(records: Sequence) -> dict[str, ImageResult]:
     return {r.image.id: ImageResult(
         detections=tuple(Prediction(d.class_id, d.box_xyxy, d.raw_confidence) for d in r.primary_candidates),
         accepted=tuple(Prediction(c.class_id, c.box_xyxy, None) for c in r.final_candidates if c.status == "accepted"),
-        flagged_for_review=r.completeness.status != "complete") for r in records}
+        flagged_for_review=r.completeness.status != "complete", routed=_routed(r)) for r in records}
 
 
 def evidence_status(label_doc: Mapping, split_status: str) -> str:
@@ -328,12 +347,24 @@ def evaluate(ground_truth: Mapping[str, GroundTruthImage], class_ids: Sequence[s
         recall_by_class={c: {"found": f, "boxes": n, "recall": _rate(f, n)} for c, (f, n) in by_class.items()},
         recall_by_size={s: {"found": f, "boxes": n, "recall": _rate(f, n)} for s, (f, n) in by_size.items()},
         fp_per_image=_rate(det_fp, len(ground_truth)), fp_per_negative_image=_rate(neg_fp, negatives))
+    routed: dict = {"rule": ROUTED_RULE}
+    for name, statuses in ROUTED_VARIANTS:
+        kept = {i: [(p, s) for p, s in results[i].routed if s in statuses] for i in ground_truth if i in results}
+        scored = {i: [p for p, _ in kept[i] if p.score is not None] for i in kept}
+        maps = mean_average_precision(scored, ground_truth, class_ids)
+        routed[name] = {"statuses": sorted(statuses), "scored": sum(map(len, scored.values())),
+                        "unscored_routed": sum(1 for i in kept for p, _ in kept[i] if p.score is None),
+                        "custom_map50_95": maps["map50_95"], "custom_map50": maps["map50"],
+                        "custom_ap_per_class": maps["per_class"],
+                        "classes_without_ground_truth": maps["classes_without_ground_truth"],
+                        "coco": coco_map(scored, ground_truth, class_ids)}
     return {
         "iou_threshold": iou_threshold,
         "images": {"labelled": len(ground_truth), "with_result": len(ground_truth) - len(failed),
                    "negative": negatives, "operational_failures": failed,
                    "unlabelled_results": len(set(results) - set(ground_truth))},
         "detector": detector,
+        "routed": routed,
         "accepted_annotations": {
             "true_positives": acc["tp"], "false_positives": acc["fp"],
             "precision": _rate(acc["tp"], acc["tp"] + acc["fp"]), "recall": _rate(acc["tp"], regular),
