@@ -66,6 +66,7 @@ def audit(
     for cid in cfg.task.class_ids:
         if cid not in accepted_classes and calibrated_probability_missing(sa, cid):
             reasons.append(f"calibrator_missing_class:{cid}")
+            suspected.append(cid)
             unresolved = True  # relevance unknown: never a negative, needs a human
     if any(c.verification is not None and c.verification.verdict == "uncertain" for c in candidates):
         reasons.append("verification_uncertain")
@@ -105,6 +106,6 @@ def audit(
 
     return AnnotationAudit(
         status=status, unmatched_candidate_ids=tuple(sorted(set(unmatched))),
-        suspected_missing_classes=tuple(suspected), reason_codes=tuple(dict.fromkeys(reasons)),
+        suspected_missing_classes=tuple(sorted(suspected)), reason_codes=tuple(dict.fromkeys(reasons)),
         established_by=established, reviewer_outcome=human_outcome,
     )

@@ -200,5 +200,22 @@ def test_t6_calibrator_missing_class_is_unknown_not_negative(tmp_path, raw_b):
                           calibrator=_ScriptedCalibrator({CLASS_A: 0.01}, 0.02)).process(_entry(tmp_path))
     assert rec.stage_a.relevance_band != "low" and "low_relevance_zero_boxes" not in rec.route.reason_codes
     assert f"calibrator_missing_class:{CLASS_B}" in rec.completeness.reason_codes
-    assert CLASS_B not in rec.completeness.suspected_missing_classes  # raw score not compared to raw bands
+    # listed for review as unknown, never judged by raw score against raw bands
+    assert f"high_relevance_zero_boxes_for_class:{CLASS_B}" not in rec.completeness.reason_codes
+    assert rec.completeness.status == "unresolved"
+
+
+# P2: the unknown (calibrator-missing) class gets an explicit human handoff, also with a VLM -------
+
+
+def test_p2_calibrator_missing_class_routes_to_human_review_with_vlm(tmp_path):
+    rel = ScriptedRelevance({"a": {CLASS_A: 0.05, CLASS_B: 0.9}})
+    vlm = FakeVLM(default="absent")
+    rec = RoutingPipeline(config(vlm={"enabled": True}), ScriptedDetector({"a": []}), RouteStore(tmp_path / "r.sqlite"),
+                          relevance=rel, calibrator=_ScriptedCalibrator({CLASS_A: 0.01}, 0.02),
+                          vlm=vlm).process(_entry(tmp_path))
+    assert "human_review" in rec.route.actions
+    assert f"calibrator_missing_class:{CLASS_B}" in rec.route.reason_codes
+    assert CLASS_B in rec.completeness.suspected_missing_classes
+    assert not any(r.class_id == CLASS_B for r, _ in vlm.requests)  # a VLM verdict cannot clear "unknown"
     assert rec.completeness.status == "unresolved"

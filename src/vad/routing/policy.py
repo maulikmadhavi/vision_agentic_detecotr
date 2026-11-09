@@ -11,6 +11,7 @@ import hashlib
 from dataclasses import dataclass
 
 from .schemas import Action, BoxFeatures, Budget, Difficulty, RouteDecision, StageA
+from .scoring import calibrated_probability_missing
 from .slicing import planned_slices
 from .task_config import RoutingConfig
 
@@ -140,6 +141,11 @@ def route(
             reasons.append("secondary_unavailable")
             add("human_review")
 
+    unknown = [c for c in cfg.task.class_ids if calibrated_probability_missing(sa, c)]
+    if unknown:  # calibrator omitted these classes: relevance unknown, a VLM cannot clear it -> human
+        reasons.extend(f"calibrator_missing_class:{c}" for c in unknown)
+        add("human_review")
+        priority = max(priority, 1)
     if not actions:
         add("standard")
     if poor_quality and "audit_sample" not in actions and stable_sample(
