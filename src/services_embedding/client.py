@@ -60,16 +60,25 @@ class WeMMMCPRelevanceScorer:
 
     def _call(self, tool: str, arguments: dict) -> dict:
         body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": tool, "arguments": arguments}}
+        payload = self._decode(self._post(body))
+        self._check_meta(payload["meta"])
+        return payload
+
+    def _post(self, body: dict) -> httpx.Response:
+        """POST the JSON-RPC body; retry once, and only on a transport (network) error."""
         headers = {"Accept": "application/json, text/event-stream"}
-        resp = None
-        for attempt in (1, 2):  # one retry, only for network errors
+        for attempt in (1, 2):
             try:
                 with httpx.Client(timeout=self.timeout_s, transport=self.transport) as client:
-                    resp = client.post(self.url, json=body, headers=headers)
-                break
+                    return client.post(self.url, json=body, headers=headers)
             except httpx.TransportError as e:
                 if attempt == 2:
                     raise RemoteScorerError(f"network: {type(e).__name__}: {e}"[:300]) from e
+        raise AssertionError("unreachable")
+
+    @staticmethod
+    def _decode(resp: httpx.Response) -> dict:
+        """The tool payload (with a ``meta`` key) from a JSON or event-stream reply; any failure raises."""
         try:
             resp.raise_for_status()
             text = resp.text
@@ -79,20 +88,23 @@ class WeMMMCPRelevanceScorer:
             if "error" in msg:
                 raise RemoteScorerError(f"jsonrpc error: {msg['error']}"[:300])
             result = msg["result"]
-            if result.get("isError"):
+            if result.get("isError"):  # a tool error is never a score
                 raise RemoteScorerError(f"isError: {result.get('content')}"[:300])
             payload = json.loads(result["content"][0]["text"])
-            meta = payload["meta"]
+            payload["meta"]  # a reply without metadata fails here, as a decoding error
         except RemoteScorerError:
             raise
         except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as e:
             raise RemoteScorerError(f"{type(e).__name__}: {e}"[:300]) from e
+        return payload
+
+    def _check_meta(self, meta: dict) -> None:
+        """Every reply must name the expected backend, model and dim (and build, once one is pinned)."""
         expected = {"backend": "wemm", "model": self.model, "dim": self.dim}
         if self.build is not None:
             expected["build"] = self.build
         if bad := {k: meta.get(k) for k, v in expected.items() if meta.get(k) != v}:
             raise RemoteScorerError(f"meta mismatch: {bad}")
-        return payload
 
     def score(self, image: Image.Image, image_id: str,
               prompts: dict[str, tuple[tuple[str, ...], tuple[str, ...]]]) -> dict[str, float]:
@@ -102,14 +114,19 @@ class WeMMMCPRelevanceScorer:
             owners += [class_id] * len(positives)
         payload = self._call("compute_similarity", {"left": [self._data_uri(image)], "right": texts,
                                                     "mode": "matrix", "metric": "cosine", "top_k": len(texts)})
+        # Exactly one finite score per prompt index: no duplicates, no extras, none missing.
+        # A malformed match anywhere is reported as such, before any index/score problem.
+        by_index: dict[int, float] = {}
+        valid = True
         try:
             (row,) = payload["results"]  # exactly one image was sent, so exactly one result row
-            pairs = [(int(m["index"]), float(m["score"])) for m in row["matches"]]
+            for m in row["matches"]:
+                index, value = int(m["index"]), float(m["score"])
+                valid = valid and index not in by_index and 0 <= index < len(texts) and math.isfinite(value)
+                by_index[index] = value
         except (KeyError, IndexError, TypeError, ValueError) as e:
             raise RemoteScorerError(f"malformed matches: {type(e).__name__}") from e
-        by_index = dict(pairs)
-        if (len(pairs) != len(by_index) or set(by_index) != set(range(len(texts)))
-                or not all(math.isfinite(v) for v in by_index.values())):
+        if not valid or len(by_index) != len(texts):
             raise RemoteScorerError(f"expected one finite score per index 0..{len(texts) - 1}")
         out: dict[str, float] = {}
         for i, class_id in enumerate(owners):

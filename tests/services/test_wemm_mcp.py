@@ -114,7 +114,17 @@ FAILURES = {
     "wrong-dim": lambda b, n: rpc_result(scores_payload([0.1, 0.1, 0.1], {**META, "dim": 1024})),
     "http-500": lambda b, n: httpx.Response(500, text="oops"),
     "network-twice": lambda b, n: httpx.ConnectError("vpn down"),
+    "timeout-twice": lambda b, n: httpx.ReadTimeout("slow"),
+    "nan-score": lambda b, n: rpc_result(_rows([[(0, 0.1), (1, float("nan")), (2, 0.3)]])),
+    "inf-score": lambda b, n: rpc_result(_rows([[(0, 0.1), (1, float("inf")), (2, 0.3)]])),
+    "non-numeric-score": lambda b, n: rpc_result(_rows([[(0, 0.1), (1, "high"), (2, 0.3)]])),
+    "missing-meta": lambda b, n: rpc_result({"results": [{"matches": []}]}),
+    "missing-results": lambda b, n: rpc_result({"meta": META}),
+    "empty-content": lambda b, n: {"jsonrpc": "2.0", "id": 1, "result": {"content": []}},
+    "sse-without-data": lambda b, n: httpx.Response(200, text="event: message\n\n",
+                                                    headers={"content-type": "text/event-stream"}),
 }
+RETRIED = {"network-twice", "timeout-twice"}  # transport failures only: one retry, then fail
 
 
 @pytest.mark.parametrize("name", list(FAILURES))
@@ -122,7 +132,7 @@ def test_failures_raise(name):
     s, calls = scorer(FAILURES[name])
     with pytest.raises(RemoteScorerError):
         s.score(_img(), "i", PROMPTS)
-    assert len(calls) == (2 if name == "network-twice" else 1)  # retry once, only on a network error
+    assert len(calls) == (2 if name in RETRIED else 1)  # retry once, only on a network error
 
 
 def test_positive_control_a_valid_reply_with_unordered_matches_and_a_real_zero_is_accepted():
