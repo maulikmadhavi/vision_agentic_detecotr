@@ -234,13 +234,16 @@ def test_rename_keeps_run_keys():
     # Golden key computed with the class under its first name (RemoteRelevanceScorer in
     # vad.routing.remote_adapters): renames and module moves must not change model_version,
     # RunInfo or the record key. The old-name alias was dropped in the restructure.
+    # MIGRATION 2026-11-10 (user decision, board D-11): VLMConfig lost its LM Studio defaults, which
+    # changes every config hash, so this key moved on purpose from rec-e025bfad645c479b to
+    # rec-6891a50d24978247. Re-supplying the old VLM defaults reproduces the old key exactly.
     from routing.schemas import ImageRef
     from services_embedding.client import WeMMMCPRelevanceScorer
 
     ref = ImageRef(id="a", uri="a.png", width=320, height=240, sha256="0" * 64)
     pipe = RoutingPipeline(config(relevance=WEMM_CFG), ScriptedDetector({}), RouteStore(":memory:"),
                            relevance=WeMMMCPRelevanceScorer(url=URL))
-    assert pipe.record_key(ref) == "rec-e025bfad645c479b"
+    assert pipe.record_key(ref) == "rec-6891a50d24978247"
 
 
 # --- Stage F: a run where the scorer failed must say so ------------------------------------------

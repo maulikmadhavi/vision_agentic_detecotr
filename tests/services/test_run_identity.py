@@ -14,16 +14,20 @@ from ..routing.helpers import config
 
 
 def test_replay_and_vlm_run_key_is_unchanged_by_moves_and_renames(tmp_path):
-    # Golden key computed before the src/vad -> src/routing + src/services restructure.
+    # Golden key. MIGRATION 2026-11-10 (user decision, board D-11): the VLM identity changed from
+    # "lmstudio:{model}" to "openai-compatible:{model}@{endpoint}" and VLMConfig lost its LM Studio
+    # defaults, so the key moved on purpose from rec-bf54146413d69a17 to rec-876f6df9a5eaad7d.
+    # Re-supplying the old defaults and the old identity string reproduces the old key exactly.
     (tmp_path / "p.jsonl").write_bytes(b'{"image_id": "a", "detections": []}\n')
     (tmp_path / "r.jsonl").write_bytes(b'{"image_id": "a", "scores": {}}\n')
     pipe = RoutingPipeline(config(vlm={"enabled": True}), PrecomputedDetector(tmp_path / "p.jsonl", "prim@1"),
                            RouteStore(":memory:"), relevance=PrecomputedRelevance(tmp_path / "r.jsonl", "rel@1"),
                            vlm=OpenAICompatibleVerifier("http://localhost:1234/v1", "qwen3-vl-4b-instruct"))
     run = pipe.run_info
-    assert (run.primary_model, run.relevance_scorer, run.vlm_model) == ("prim@1", "rel@1", "lmstudio:qwen3-vl-4b-instruct")
+    assert (run.primary_model, run.relevance_scorer, run.vlm_model) == (
+        "prim@1", "rel@1", "openai-compatible:qwen3-vl-4b-instruct@localhost:1234/v1")
     ref = ImageRef(id="a", uri="a.png", width=320, height=240, sha256="0" * 64)
-    assert pipe.record_key(ref) == "rec-bf54146413d69a17"
+    assert pipe.record_key(ref) == "rec-876f6df9a5eaad7d"
 
 
 def test_integration_packages_resolve_to_src_and_the_old_services_package_is_gone():

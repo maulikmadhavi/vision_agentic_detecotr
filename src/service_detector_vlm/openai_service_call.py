@@ -10,6 +10,7 @@ import base64
 import io
 import os
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 import httpx
 from PIL import Image
@@ -38,7 +39,9 @@ class OpenAICompatibleVerifier:
     ``json_schema`` request is not retried in another format). Any transport error,
     malformed or contradictory answer becomes ``uncertain``. ``api_key_env`` names an
     environment variable holding a bearer token; the token never enters repr, traces or
-    the recorded identity. The identity stays ``lmstudio:{model}`` until a deliberate migration.
+    the recorded identity. The identity is ``openai-compatible:{model}@{host[:port]/path}``:
+    the same model name on two endpoints never shares cached results. URL credentials and
+    the scheme are left out.
     """
 
     base_url: str
@@ -59,7 +62,9 @@ class OpenAICompatibleVerifier:
 
     @property
     def model_version(self) -> str:
-        return f"lmstudio:{self.model}"
+        url = urlsplit(self.base_url)
+        endpoint = (url.hostname or "") + (f":{url.port}" if url.port else "") + url.path.rstrip("/")
+        return f"openai-compatible:{self.model}@{endpoint}"
 
     def _image_payload(self, image: Image.Image, region) -> str:
         if region is not None:

@@ -150,6 +150,9 @@ def _run_shadow(parser: argparse.ArgumentParser, args: argparse.Namespace, cfg: 
     relevance = _build_relevance_scorer(parser, args, cfg)
     vlm = None
     if cfg.vlm.enabled:
+        for name in ("base_url", "model"):
+            if not getattr(cfg.vlm, name):
+                parser.error(f"VLM verification needs vlm.{name} in the config (there is no built-in endpoint or model)")
         try:
             vlm = OpenAICompatibleVerifier(cfg.vlm.base_url, cfg.vlm.model, cfg.vlm.timeout_s, cfg.vlm.max_tokens,
                                            cfg.vlm.crop_padding, cfg.vlm.api_key_env)

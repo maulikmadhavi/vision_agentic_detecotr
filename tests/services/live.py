@@ -23,7 +23,6 @@ import pytest
 from PIL import Image, ImageDraw
 
 from routing.schemas import ClassSpec, TaskSpec, VerificationRequest
-from routing.task_config import VLMConfig
 from service_detector_gdino.client import RemoteDetector, RemoteDetectorError
 from service_detector_vlm.openai_service_call import OpenAICompatibleVerifier
 from services_embedding.client import RemoteScorerError, WeMMMCPRelevanceScorer
@@ -33,8 +32,8 @@ GDINO_MODEL_ID = os.environ.get("VAD_GDINO_MODEL_ID", "grounding-dino-tiny")
 GDINO_REVISION = os.environ.get("VAD_GDINO_REVISION", "a2bb814dd30d+bt0.35+tt0.25")
 GDINO_WEIGHTS = os.environ.get("VAD_GDINO_WEIGHTS_SHA256",
                                "1a2412ef99bd74bcd3c2a246fa1e48581f8889a1300c9051974741314fc042f3")
-VLM_URL = os.environ.get("VAD_VLM_URL", VLMConfig().base_url)
-VLM_MODEL = os.environ.get("VAD_VLM_MODEL", VLMConfig().model)
+VLM_URL = os.environ.get("VAD_VLM_URL", "http://localhost:1234/v1")  # local LM Studio example
+VLM_MODEL = os.environ.get("VAD_VLM_MODEL", "qwen3-vl-4b-instruct")
 VLM_API_KEY_ENV = os.environ.get("VAD_VLM_API_KEY_ENV") or None
 _BROKEN_VLM = {"vlm_unavailable", "vlm_timeout", "vlm_malformed", "vlm_contradictory"}
 

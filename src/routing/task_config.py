@@ -107,8 +107,10 @@ class AuditConfig(Strict):
 
 class VLMConfig(Strict):
     enabled: bool = False
-    base_url: str = "http://localhost:1234/v1"  # any OpenAI-compatible endpoint; LM Studio is the local example
-    model: str = "qwen3-vl-4b-instruct"
+    # No built-in endpoint or model: any OpenAI-compatible server, named explicitly in the
+    # config whenever the VLM is enabled (the example config uses local LM Studio).
+    base_url: str | None = None
+    model: str | None = None
     # Name of an environment variable holding a bearer token (never the token itself).
     # Not part of config_hash: credentials do not change results or cache identity.
     api_key_env: str | None = None
