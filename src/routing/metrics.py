@@ -177,9 +177,14 @@ def average_precision(predictions: Mapping[str, Sequence[Prediction]], ground_tr
         match = match_image(preds, gt, iou_threshold)
         true_positives, neutral = {i for i, _ in match.tp}, set(match.ignored)
         pooled += [(p.score, i in true_positives) for i, p in enumerate(preds) if i not in neutral]
+    return _ap_from_pooled(pooled, n_boxes)
+
+
+def _ap_from_pooled(pooled: list[tuple[float, bool]], n_boxes: int) -> float | None:
+    """101-point AP from (score, true positive?) pairs pooled in image order; None without ground truth."""
     if n_boxes == 0:
         return None
-    pooled.sort(key=lambda item: -item[0])  # stable: ties keep image order, then within-image order
+    pooled = sorted(pooled, key=lambda item: -item[0])  # stable: ties keep image order, then within-image order
     hits = np.array([hit for _, hit in pooled], dtype=bool)
     tp, fp = np.cumsum(hits), np.cumsum(~hits)
     recall = tp / n_boxes
@@ -372,3 +377,60 @@ def evaluate(ground_truth: Mapping[str, GroundTruthImage], class_ids: Sequence[s
             "silent_misses": acc["silent"], "review_coverage": _rate(acc["review"], acc["review"] + acc["silent"]),
         },
     }
+
+
+# --------------------------------------------------------------------------- per-image outcomes (run-metrics-v1)
+
+
+def _outcomes(predictions: Sequence[Prediction], gt: GroundTruthImage, class_ids: Sequence[str]) -> dict:
+    """Per class: ground-truth count and, for each scored prediction (score order), a match code per IoU
+    threshold: 1 true positive, 0 false positive, -1 neutral (on an ignore box). Ids and scores only."""
+    classes = {}
+    for c in class_ids:
+        preds = sorted((p for p in predictions if p.class_id == c and p.score is not None), key=lambda p: -p.score)
+        n_boxes = sum(1 for box in gt.boxes if box.class_id == c and not box.ignore)
+        if not preds and not n_boxes:
+            continue
+        codes = [[0] * len(IOU_THRESHOLDS) for _ in preds]
+        for k, threshold in enumerate(IOU_THRESHOLDS):
+            match = match_image(preds, gt, threshold)
+            for i, _ in match.tp:
+                codes[i][k] = 1
+            for i in match.ignored:
+                codes[i][k] = -1
+        classes[c] = {"gt": n_boxes, "ranked": [[p.score, codes[i]] for i, p in enumerate(preds)]}
+    return {"unscored": sum(1 for p in predictions if p.score is None), "classes": classes}
+
+
+def per_image_outcomes(ground_truth: Mapping[str, GroundTruthImage], results: Mapping[str, ImageResult],
+                       class_ids: Sequence[str]) -> dict[str, dict]:
+    """What a paired bootstrap needs per labelled image, for primary and both routed variants."""
+    out = {}
+    for image_id, gt in sorted(ground_truth.items()):
+        result = results.get(image_id)
+        routed = result.routed if result else ()
+        out[image_id] = {"result": result is not None,
+                         "primary": _outcomes(result.detections if result else (), gt, class_ids),
+                         **{source: _outcomes([p for p, s in routed if s in statuses], gt, class_ids)
+                            for source, statuses in (("routed_all", ROUTED_VARIANTS[0][1]),
+                                                     ("routed_accepted", ROUTED_VARIANTS[1][1]))}}
+    return out
+
+
+def map_from_outcomes(outcomes: Sequence[Mapping], class_ids: Sequence[str]) -> dict:
+    """mAP50-95 and mAP50 (custom-vad-1) recomputed from stored per-image outcomes, pooled in the given
+    image order; on the sorted full cohort it equals :func:`mean_average_precision`."""
+    per_class: dict[str, dict[str, float]] = {}
+    without: list[str] = []
+    for c in class_ids:
+        entries = [o["classes"][c] for o in outcomes if c in o["classes"]]
+        n_boxes = sum(e["gt"] for e in entries)
+        aps = [_ap_from_pooled([(score, codes[k] == 1) for e in entries for score, codes in e["ranked"]
+                                if codes[k] != -1], n_boxes) for k in range(len(IOU_THRESHOLDS))]
+        if aps[0] is None:
+            without.append(c)
+            continue
+        per_class[c] = {"ap50_95": float(np.mean(aps)), "ap50": aps[0]}
+    return {"map50_95": float(np.mean([v["ap50_95"] for v in per_class.values()])) if per_class else None,
+            "map50": float(np.mean([v["ap50"] for v in per_class.values()])) if per_class else None,
+            "per_class": per_class, "classes_without_ground_truth": without}

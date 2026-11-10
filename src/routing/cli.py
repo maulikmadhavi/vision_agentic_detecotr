@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -25,15 +26,18 @@ from .evaluation import (
 from .export import export_legacy, export_reviewed, export_routed
 from .image_inputs import ManifestEntry, RepeatedImageError, image_id, load_image, load_manifest, repeated_ids
 from .interfaces import Detector, RelevanceScorer
-from .metrics import LabelError, evaluate, evidence_status, image_results, load_ground_truth
+from .metrics import (
+    ROUTED_RULE, LabelError, evaluate, evidence_status, image_results, load_ground_truth, per_image_outcomes,
+)
 from .pipeline import RoutingPipeline
 from .replay import PrecomputedDetector, PrecomputedRelevance
 from .review import AdjudicationLogError, ReviewError, apply_adjudications, open_findings, read_adjudications
 from .sample import (
-    SampleError, UnresolvedReviews, frozen_label_subset, group_manifest, make_split, merge_reviews, review_queue,
+    SampleError, UnresolvedReviews, frozen_label_subset, group_manifest, label_digest, make_split, merge_reviews,
+    review_queue,
 )
 from .store import RouteStore, StoreLockedError, job_lock
-from .schemas import ErrorRecord, RouteRecord, TaskSpec, export_json_schemas
+from .schemas import ErrorRecord, RouteRecord, TaskSpec, canonical_json, export_json_schemas, stable_id
 from .task_config import RoutingConfig, load_config, shadow_run_config
 
 
@@ -46,7 +50,8 @@ def _parser() -> argparse.ArgumentParser:
     e.add_argument("--config", required=True)
     e.add_argument("--labels", required=True, help="COCO JSON with vad_* fields (see routing.metrics)")
     e.add_argument("--trace", required=True, help="route_trace.jsonl of the shadow run")
-    e.add_argument("--out", required=True, help="metrics JSON to write")
+    e.add_argument("--out", required=True, help="run-metrics-v1 JSON to write (never overwritten)")
+    e.add_argument("--parent", help="the run-metrics file of the run this one follows (its metrics_id is recorded)")
     e.add_argument("--iou", type=float, default=0.5, help="working IoU threshold for recall, false positives, misses")
     e.add_argument("--split-manifest", help="with --frozen-lock: score only the frozen_eval images, after verifying")
     e.add_argument("--frozen-lock", help="the frozen lock written by `vad-route sample split`")
@@ -181,8 +186,26 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("--primary-model-id/--primary-revision/--primary-weights-sha256 are only with --primary-url")
 
 
+RUN_METRICS_VERSION = "run-metrics-v1"
+
+
+def _content_sha256(obj) -> str:
+    return hashlib.sha256(canonical_json(obj).encode()).hexdigest()
+
+
 def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
-    task = load_config(args.config).task
+    out = Path(args.out)
+    if out.exists():
+        parser.error(f"{out} already exists; run metrics are immutable, so write each evaluation to a new --out")
+    parent_id = None
+    if args.parent:
+        parent = json.loads(Path(args.parent).read_text(encoding="utf-8"))
+        body = {k: v for k, v in parent.items() if k != "metrics_id"}
+        if parent.get("version") != RUN_METRICS_VERSION or parent.get("metrics_id") != stable_id("met", body):
+            parser.error(f"--parent {args.parent} is not an unmodified {RUN_METRICS_VERSION} file")
+        parent_id = parent["metrics_id"]
+    cfg = load_config(args.config)
+    task = cfg.task
     label_doc = json.loads(Path(args.labels).read_text(encoding="utf-8"))
     try:
         ground_truth = load_ground_truth(label_doc, task)
@@ -191,7 +214,8 @@ def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     if bool(args.split_manifest) != bool(args.frozen_lock):
         parser.error("--split-manifest and --frozen-lock go together")
     split = {"status": "unverified: no --split-manifest/--frozen-lock; every labelled image is scored, "
-                       "whatever its split"}
+                       "whatever its split", "manifest_sha256": None}
+    manifest = None
     lines = Path(args.trace).read_text(encoding="utf-8").splitlines()
     records = [RouteRecord.model_validate_json(line) for line in lines if line.strip()]
     try:
@@ -209,7 +233,8 @@ def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         except IsolationError as e:
             parser.error(f"the frozen labels do not verify against --frozen-lock: {e}")
         ground_truth = {i: ground_truth[i] for i in frozen_ids}
-        split = {"frozen_images": len(frozen_ids), "lock_sha256": lock["lock_sha256"]}
+        split = {"frozen_images": len(frozen_ids), "lock_sha256": lock["lock_sha256"],
+                 "manifest_sha256": _content_sha256(manifest)}
         if "images" not in lock:  # a lock from before image hashes: labels verified, image content not
             split["status"] = ("unverified: the frozen labels match --frozen-lock, but the lock predates image "
                                "hashes, so image content is not checked; re-lock (frozen-lock-v2) to bind it")
@@ -228,12 +253,31 @@ def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     # are only listed, so a development or unlabelled record cannot change any cohort metric.
     cohort = [r for r in records if r.image.id in ground_truth]
     outside = sorted(r.image.id for r in records if r.image.id not in ground_truth)
+    cohort_results = {r.image.id: results[r.image.id] for r in cohort}
     metrics = {"evidence_status": evidence_status(label_doc, split["status"]), "split": split,
-               **evaluate(ground_truth, task.class_ids, {r.image.id: results[r.image.id] for r in cohort}, args.iou),
+               **evaluate(ground_truth, task.class_ids, cohort_results, args.iou),
                "cost": route_report(cohort), "out_of_cohort": {"results": len(outside), "image_ids": outside}}
-    out = Path(args.out)
+    # run-metrics-v1: immutable, identified by its own content; ids, scores and match codes only.
+    cohort_ids = sorted(ground_truth)
+    runs = [json.loads(r) for r in sorted({canonical_json(rec.run) for rec in cohort})]
+    per_image = per_image_outcomes(ground_truth, cohort_results, task.class_ids)
+    for image_id, outcome in per_image.items():
+        outcome["group_id"] = manifest["images"][image_id].get("group_id") if manifest else None
+    labels = {**frozen_label_subset(label_doc, cohort_ids), "vad_label_provenance": label_doc.get("vad_label_provenance")}
+    body = {
+        "version": RUN_METRICS_VERSION, "run_id": stable_id("run", runs), "parent_id": parent_id,
+        "runs": runs, "mixed_runs": len(runs) > 1, "seed": cfg.audit.seed,
+        "series": {"cohort_ids_sha256": _content_sha256(cohort_ids), "labels_sha256": label_digest(labels),
+                   "images_sha256": _content_sha256([[i, manifest["images"][i]["sha256"]] for i in cohort_ids])
+                   if manifest else None,
+                   "evaluators": {"custom": metrics["detector"]["evaluator"],
+                                  "coco": f"pycocotools {metrics['detector']['coco']['version']}",
+                                  "routed_rule": ROUTED_RULE.split(":", 1)[0]}},
+        **metrics, "per_image": per_image,
+    }
+    doc = {"version": RUN_METRICS_VERSION, "metrics_id": stable_id("met", body), **body}
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    out.write_text(json.dumps(doc, indent=2), encoding="utf-8")
     print(f"evidence_status: {metrics['evidence_status']}")
     print(f"metrics written to {out}")
     return 0

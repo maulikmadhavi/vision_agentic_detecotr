@@ -60,7 +60,9 @@ def test_evaluate_with_a_verified_lock_scores_only_the_frozen_images(tmp_path):
     assert doc["images"]["labelled"] == len(frozen_ids) == 10
     assert doc["split"] == {"status": "verified frozen_eval", "frozen_images": 10,
                             "lock_sha256": manifest["frozen_lock_sha256"],
-                            "image_content": "bound: each frozen result matches the lock's sha256 and size"}
+                            "image_content": "bound: each frozen result matches the lock's sha256 and size",
+                            "manifest_sha256": doc["split"]["manifest_sha256"]}
+    assert len(doc["split"]["manifest_sha256"]) == 64
 
 
 def test_evaluate_without_a_split_says_it_is_unverified(tmp_path):
@@ -236,6 +238,7 @@ def test_a_slow_development_record_changes_no_frozen_metric(tmp_path):
     mixed = _metrics(paths, tmp_path, [frozen, slow], "mixed.json")
     assert mixed.pop("out_of_cohort") == {"results": 1, "image_ids": [slow.image.id]}
     assert alone.pop("out_of_cohort") == {"results": 0, "image_ids": []}
+    mixed.pop("metrics_id"), alone.pop("metrics_id")  # the file's own digest covers out_of_cohort
     assert mixed == alone and mixed["cost"]["images"] == 1
 
 
