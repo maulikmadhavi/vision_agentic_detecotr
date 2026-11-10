@@ -268,8 +268,10 @@ def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         "version": RUN_METRICS_VERSION, "run_id": stable_id("run", runs), "parent_id": parent_id,
         "runs": runs, "mixed_runs": len(runs) > 1, "seed": cfg.audit.seed,
         "series": {"cohort_ids_sha256": _content_sha256(cohort_ids), "labels_sha256": label_digest(labels),
+                   # only a verified split binds image content (frozen-lock-v2 == manifest == records);
+                   # an old lock or a split-v1 manifest gives null, never a derived or upgraded hash
                    "images_sha256": _content_sha256([[i, manifest["images"][i]["sha256"]] for i in cohort_ids])
-                   if manifest else None,
+                   if split["status"] == "verified frozen_eval" else None,
                    "evaluators": {"custom": metrics["detector"]["evaluator"],
                                   "coco": f"pycocotools {metrics['detector']['coco']['version']}",
                                   "routed_rule": ROUTED_RULE.split(":", 1)[0]}},

@@ -180,7 +180,40 @@ def test_an_old_lock_without_image_hashes_is_reported_unverified(tmp_path):
     assert "version" not in json.loads(paths["lock"].read_text(encoding="utf-8"))  # never upgraded
 
 
-# --- R5-5: one result per image in an evaluated trace ---------------------------------------------
+# --- R6-1: old split files give a descriptive, unverified report (no crash, nothing fabricated) ---------
+
+
+def _old_files(tmp_path, manifest_version):
+    """An old (pre-image-hash) lock, with either a genuine split-v1 manifest or the split-v2 one."""
+    paths, manifest, *_ = _split_files(tmp_path)
+    lock = json.loads(paths["lock"].read_text(encoding="utf-8"))
+    old = {k: lock[k] for k in ("image_ids", "group_ids", "annotations_sha256")}
+    old["lock_sha256"] = hashlib.sha256(canonical_json(old).encode()).hexdigest()
+    if manifest_version == "split-v1":
+        manifest = {**manifest, "version": "split-v1",
+                    "images": {i: {k: v for k, v in img.items() if k not in CONTENT}
+                               for i, img in manifest["images"].items()}}
+    paths["lock"].write_text(json.dumps(old), encoding="utf-8")
+    paths["manifest"].write_text(json.dumps({**manifest, "frozen_lock_sha256": old["lock_sha256"]}), encoding="utf-8")
+    record = _record(tmp_path, sorted(old["image_ids"])[0])
+    paths["trace"].write_text(record.model_dump_json() + "\n", encoding="utf-8")
+    return paths, record
+
+
+CONTENT = ("sha256", "width", "height")
+
+
+@pytest.mark.parametrize("manifest_version", ["split-v1", "split-v2"])
+def test_an_old_lock_gives_an_unverified_report_without_an_image_digest(tmp_path, manifest_version):
+    paths, record = _old_files(tmp_path, manifest_version)
+    before = {name: paths[name].read_bytes() for name in ("manifest", "lock", "labels", "trace")}
+    assert _evaluate_frozen(paths, tmp_path) == 0
+    doc = json.loads((tmp_path / "m.json").read_text(encoding="utf-8"))
+    assert doc["split"]["status"].startswith("unverified") and doc["evidence_status"].startswith("NOT A FINDING")
+    assert doc["series"]["images_sha256"] is None  # never derived from an unverified split
+    manifest = json.loads(before["manifest"])
+    assert doc["per_image"][record.image.id]["group_id"] == manifest["images"][record.image.id]["group_id"]
+    assert {name: paths[name].read_bytes() for name in before} == before  # inputs untouched
 
 
 def _record(tmp_path, name, detector=None):
