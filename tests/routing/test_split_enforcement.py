@@ -321,6 +321,145 @@ def test_human_labels_with_an_old_lock_are_not_a_finding_but_metrics_are_kept(tm
     assert "vad_label_provenance" not in doc["evidence_status"] and "detector" in doc and "cost" in doc
 
 
+# --- R6-3: the development cohort ----------------------------------------------------------------------
+
+
+def _dev_files(tmp_path, human=True):
+    """A split whose first development image is a real white file (manifest hash = its bytes)."""
+    _, probe, _, _ = _split_files(tmp_path / "probe")
+    dev_id = sorted(i for i, img in probe["images"].items() if img["split"] == "development")[0]
+    white = tmp_path / "dev_white.png"
+    Image.new("RGB", (100, 100), (255, 255, 255)).save(white)
+    content = {dev_id: {"sha256": hashlib.sha256(white.read_bytes()).hexdigest(), "width": 100, "height": 100}}
+    paths, manifest, labels, frozen_ids = _split_files(tmp_path, content=content)
+    if human:
+        _human(paths)
+    record = RoutingPipeline(config(), ScriptedDetector({}), RouteStore(":memory:")).process(
+        ManifestEntry(str(white), image_id=dev_id))
+    return paths, manifest, frozen_ids, record
+
+
+def _evaluate_dev(paths, tmp_path, records, name="dev.json"):
+    paths["trace"].write_text("".join(r.model_dump_json() + "\n" for r in records), encoding="utf-8")
+    return _evaluate(paths, tmp_path / name, "--split-manifest", str(paths["manifest"]),
+                     "--frozen-lock", str(paths["lock"]), "--cohort", "development")
+
+
+def test_the_development_cohort_scores_development_images_as_a_development_estimate(tmp_path):
+    paths, manifest, _, record = _dev_files(tmp_path)
+    assert _evaluate_dev(paths, tmp_path, [record]) == 0
+    doc = json.loads((tmp_path / "dev.json").read_text(encoding="utf-8"))
+    development = sorted(i for i, img in manifest["images"].items() if img["split"] == "development")
+    assert doc["images"]["labelled"] == len(development) and set(doc["per_image"]) == set(development)
+    assert doc["evidence_status"].startswith("development estimate:") and not doc["evidence_status"].startswith("evidence:")
+    assert doc["split"]["status"].startswith("verified development") and doc["split"]["labels_locked"] is False
+    assert doc["series"]["cohort"] == "development" and doc["series"]["images_sha256"] is not None
+    assert doc["per_image"][record.image.id]["group_id"] == manifest["images"][record.image.id]["group_id"]
+
+
+def test_a_development_trace_with_a_frozen_record_is_refused(tmp_path, capsys):
+    paths, _, frozen_ids, record = _dev_files(tmp_path)
+    frozen = _record(tmp_path, sorted(frozen_ids)[0])
+    with pytest.raises(SystemExit) as exc:
+        _evaluate_dev(paths, tmp_path, [record, frozen])
+    err = capsys.readouterr().err
+    assert exc.value.code == 2 and frozen.image.id in err and "development images only" in err
+    assert not (tmp_path / "dev.json").exists()
+
+
+def test_a_frozen_record_is_refused_by_id_even_without_a_group(tmp_path, capsys):
+    paths, manifest, frozen_ids, record = _dev_files(tmp_path)
+    target = sorted(frozen_ids)[0]
+    manifest["images"][target]["group_id"] = None  # only its id marks it as frozen now
+    paths["manifest"].write_text(json.dumps(manifest), encoding="utf-8")
+    other = tmp_path / "frozen_red.png"
+    Image.new("RGB", (100, 100), (255, 0, 0)).save(other)
+    frozen = RoutingPipeline(config(), ScriptedDetector({}), RouteStore(":memory:")).process(
+        ManifestEntry(str(other), image_id=target))
+    with pytest.raises(SystemExit) as exc:
+        _evaluate_dev(paths, tmp_path, [record, frozen])
+    assert exc.value.code == 2 and target in capsys.readouterr().err
+
+
+def test_a_frozen_group_under_a_new_id_is_refused(tmp_path, capsys):
+    paths, manifest, frozen_ids, record = _dev_files(tmp_path)
+    group = manifest["images"][sorted(frozen_ids)[0]]["group_id"]
+    other = tmp_path / "late.png"
+    Image.new("RGB", (100, 100), (0, 0, 255)).save(other)
+    late = RoutingPipeline(config(), ScriptedDetector({}), RouteStore(":memory:")).process(
+        ManifestEntry(str(other), image_id="late-copy", group_id=group))
+    with pytest.raises(SystemExit) as exc:
+        _evaluate_dev(paths, tmp_path, [record, late])
+    assert exc.value.code == 2 and "late-copy" in capsys.readouterr().err
+
+
+def test_a_development_record_on_other_image_content_is_refused(tmp_path, capsys):
+    paths, _, _, record = _dev_files(tmp_path)
+    red = tmp_path / "dev_red.png"
+    Image.new("RGB", (100, 100), (255, 0, 0)).save(red)
+    swapped = RoutingPipeline(config(), ScriptedDetector({}), RouteStore(":memory:")).process(
+        ManifestEntry(str(red), image_id=record.image.id))
+    with pytest.raises(SystemExit) as exc:
+        _evaluate_dev(paths, tmp_path, [swapped])
+    assert exc.value.code == 2 and record.image.id in capsys.readouterr().err
+
+
+def test_the_development_cohort_needs_a_content_bound_lock_and_manifest(tmp_path, capsys):
+    paths, record = _old_files(tmp_path / "old", "split-v2")
+    with pytest.raises(SystemExit) as exc:
+        _evaluate_dev(paths, tmp_path, [record])
+    assert exc.value.code == 2 and "re-lock" in capsys.readouterr().err
+    paths, manifest, _, record = _dev_files(tmp_path / "v1")  # a frozen-lock-v2 with a manifest downgraded to v1
+    manifest = {**manifest, "version": "split-v1",
+                "images": {i: {k: v for k, v in img.items() if k not in CONTENT} for i, img in manifest["images"].items()}}
+    paths["manifest"].write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        _evaluate_dev(paths, tmp_path, [record])
+    assert exc.value.code == 2 and "split-v2" in capsys.readouterr().err
+
+
+def test_the_development_cohort_needs_a_split(tmp_path, capsys):
+    paths, *_ = _split_files(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        _evaluate(paths, tmp_path / "m.json", "--cohort", "development")
+    assert exc.value.code == 2 and "--split-manifest" in capsys.readouterr().err
+
+
+def test_a_development_estimate_needs_human_labels_and_one_run(tmp_path):
+    paths, _, _, record = _dev_files(tmp_path, human=False)
+    assert _evaluate_dev(paths, tmp_path, [record], "synthetic.json") == 0
+    status = json.loads((tmp_path / "synthetic.json").read_text(encoding="utf-8"))["evidence_status"]
+    assert status.startswith("NOT A FINDING") and "vad_label_provenance" in status
+    paths, manifest, _, record = _dev_files(tmp_path / "mixed")
+    development = sorted(i for i, img in manifest["images"].items() if img["split"] == "development")
+    second = tmp_path / "mixed" / "dev2.png"
+    Image.new("RGB", (100, 100), (255, 255, 255)).save(second)  # same bytes as the first: allowed, not frozen
+    manifest["images"][development[1]].update(sha256=record.image.sha256, width=100, height=100)
+    paths["manifest"].write_text(json.dumps(manifest), encoding="utf-8")
+    other_run = RoutingPipeline(config(), ScriptedDetector({}, model_version="scripted@2"), RouteStore(":memory:")).process(
+        ManifestEntry(str(second), image_id=development[1]))
+    assert _evaluate_dev(paths, tmp_path, [record, other_run], "mixed.json") == 0
+    status = json.loads((tmp_path / "mixed.json").read_text(encoding="utf-8"))["evidence_status"]
+    assert status.startswith("NOT A FINDING") and "mixes 2 runs" in status
+
+
+def test_frozen_eval_is_the_default_cohort_and_unchanged_but_for_series_cohort(tmp_path):
+    paths, frozen, _ = _frozen_and_development_records(tmp_path)
+    default = _metrics(paths, tmp_path, [frozen], "default.json")
+    explicit_args = ["--split-manifest", str(paths["manifest"]), "--frozen-lock", str(paths["lock"]),
+                     "--cohort", "frozen_eval"]
+    assert _evaluate(paths, tmp_path / "explicit.json", *explicit_args) == 0
+    assert (tmp_path / "explicit.json").read_bytes() == (tmp_path / "default.json").read_bytes()
+    assert default["series"]["cohort"] == "frozen_eval" and "labels_locked" not in default["split"]
+    assert set(default["series"]) == {"cohort", "cohort_ids_sha256", "labels_sha256", "images_sha256", "evaluators"}
+
+
+def test_without_a_split_the_series_cohort_is_unsplit(tmp_path):
+    paths, *_ = _split_files(tmp_path)
+    assert _evaluate(paths, tmp_path / "m.json") == 0
+    assert json.loads((tmp_path / "m.json").read_text(encoding="utf-8"))["series"]["cohort"] == "unsplit"
+
+
 @pytest.mark.parametrize("flag", ["--split-manifest", "--frozen-lock"])
 def test_evaluate_needs_both_split_flags_or_neither(tmp_path, capsys, flag):
     paths, *_ = _split_files(tmp_path)

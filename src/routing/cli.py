@@ -27,7 +27,8 @@ from .export import export_legacy, export_reviewed, export_routed
 from .image_inputs import ManifestEntry, RepeatedImageError, image_id, load_image, load_manifest, repeated_ids
 from .interfaces import Detector, RelevanceScorer
 from .metrics import (
-    ROUTED_RULE, LabelError, evaluate, evidence_status, image_results, load_ground_truth, per_image_outcomes,
+    DEVELOPMENT_STATUS, ROUTED_RULE, LabelError, evaluate, evidence_status, image_results, load_ground_truth,
+    per_image_outcomes,
 )
 from .pipeline import RoutingPipeline
 from .replay import PrecomputedDetector, PrecomputedRelevance
@@ -55,6 +56,9 @@ def _parser() -> argparse.ArgumentParser:
     e.add_argument("--iou", type=float, default=0.5, help="working IoU threshold for recall, false positives, misses")
     e.add_argument("--split-manifest", help="with --frozen-lock: score only the frozen_eval images, after verifying")
     e.add_argument("--frozen-lock", help="the frozen lock written by `vad-route sample split`")
+    e.add_argument("--cohort", choices=["frozen_eval", "development"], default="frozen_eval",
+                   help="with a split: score the frozen images (promotion checks) or the development images "
+                        "(iteration; a development estimate, never promotion evidence)")
     sample = sub.add_parser("sample", help="tooling for the human-checked trial sample")
     sample_sub = sample.add_subparsers(dest="sample_cmd", required=True)
     g = sample_sub.add_parser("group", help="group exact and near-duplicate images; list pairs for confirmation")
@@ -193,6 +197,43 @@ def _content_sha256(obj) -> str:
     return hashlib.sha256(canonical_json(obj).encode()).hexdigest()
 
 
+def _development_cohort(parser: argparse.ArgumentParser, manifest: dict, lock: dict, frozen_ids: list[str],
+                        records: list[RouteRecord], ground_truth: dict) -> tuple[dict, dict]:
+    """The development images of a verified split, refusing any trace that holds a frozen image."""
+    if "images" not in lock:
+        parser.error("--cohort development needs a frozen-lock-v2: this lock predates image hashes, so it cannot "
+                     "bind the frozen set; re-lock with `vad-route sample split`")
+    if manifest.get("version") != "split-v2":
+        parser.error("--cohort development needs a split-v2 manifest (each image's sha256 and size) from "
+                     "`vad-route sample split`")
+    images = manifest["images"]
+    if any({k: images[i].get(k) for k in CONTENT_FIELDS} != lock["images"][i] for i in frozen_ids):
+        parser.error("--frozen-lock does not belong to --split-manifest (frozen image content differs)")
+    frozen = set(frozen_ids)
+    frozen_groups = ({images[i].get("group_id") for i in frozen_ids}
+                     | {g for g, v in manifest.get("groups", {}).items() if v["split"] == "frozen_eval"}) - {None}
+    if leaked := sorted(r.image.id for r in records if r.image.id in frozen
+                        or images.get(r.image.id, {}).get("group_id") in frozen_groups
+                        or r.image.group_id in frozen_groups):
+        parser.error(f"--cohort development: the trace holds frozen_eval images (by id or group): "
+                     f"{leaked[:10]}; run shadow on the development images only")
+    development = sorted(i for i, v in images.items() if v["split"] == "development")
+    if unlabelled := [i for i in development if i not in ground_truth]:
+        parser.error(f"development images without labels: {unlabelled[:5]}")
+    try:
+        check_image_content({i: images[i] for i in development},
+                            [r.image for r in records if r.image.id in images and images[r.image.id]["split"] == "development"],
+                            "--split-manifest")
+    except IsolationError as e:
+        parser.error(f"a development result was routed on other image content: {e}")
+    split = {"status": f"{DEVELOPMENT_STATUS} (images content-bound to split-v2; labels not locked)",
+             "development_images": len(development), "lock_sha256": lock["lock_sha256"],
+             "manifest_sha256": _content_sha256(manifest),
+             "image_content": "bound: each development result matches the split-v2 manifest's sha256 and size",
+             "labels_locked": False}
+    return {i: ground_truth[i] for i in development}, split
+
+
 def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     out = Path(args.out)
     if out.exists():
@@ -220,6 +261,8 @@ def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         parser.error(f"--labels: {e}")
     if bool(args.split_manifest) != bool(args.frozen_lock):
         parser.error("--split-manifest and --frozen-lock go together")
+    if args.cohort == "development" and not args.split_manifest:
+        parser.error("--cohort development needs --split-manifest and --frozen-lock")
     split = {"status": "unverified: no --split-manifest/--frozen-lock; every labelled image is scored, "
                        "whatever its split", "manifest_sha256": None}
     manifest = None
@@ -237,6 +280,9 @@ def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
             load_frozen(args.frozen_lock, frozen_label_subset(label_doc, frozen_ids))
         except IsolationError as e:
             parser.error(f"the frozen labels do not verify against --frozen-lock: {e}")
+        if args.cohort == "development":
+            ground_truth, split = _development_cohort(parser, manifest, lock, frozen_ids, records, ground_truth)
+    if args.split_manifest and args.cohort == "frozen_eval":
         ground_truth = {i: ground_truth[i] for i in frozen_ids}
         split = {"frozen_images": len(frozen_ids), "lock_sha256": lock["lock_sha256"],
                  "manifest_sha256": _content_sha256(manifest)}
@@ -272,11 +318,12 @@ def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     body = {
         "version": RUN_METRICS_VERSION, "run_id": stable_id("run", runs), "parent_id": parent_id,
         "runs": runs, "mixed_runs": len(runs) > 1, "seed": cfg.audit.seed,
-        "series": {"cohort_ids_sha256": _content_sha256(cohort_ids), "labels_sha256": label_digest(labels),
+        "series": {"cohort": args.cohort if manifest else "unsplit", "cohort_ids_sha256": _content_sha256(cohort_ids), "labels_sha256": label_digest(labels),
                    # only a verified split binds image content (frozen-lock-v2 == manifest == records);
                    # an old lock or a split-v1 manifest gives null, never a derived or upgraded hash
                    "images_sha256": _content_sha256([[i, manifest["images"][i]["sha256"]] for i in cohort_ids])
-                   if split["status"] == "verified frozen_eval" else None,
+                   if split["status"] == "verified frozen_eval" or split["status"].startswith(DEVELOPMENT_STATUS)
+                   else None,
                    "evaluators": {"custom": metrics["detector"]["evaluator"],
                                   "coco": f"pycocotools {metrics['detector']['coco']['version']}",
                                   "routed_rule": ROUTED_RULE.split(":", 1)[0]}},

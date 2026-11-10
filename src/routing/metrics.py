@@ -268,19 +268,28 @@ def image_results(records: Sequence) -> dict[str, ImageResult]:
         flagged_for_review=r.completeness.status != "complete", routed=_routed(r)) for r in records}
 
 
+DEVELOPMENT_STATUS = "verified development"
+
+
 def evidence_status(label_doc: Mapping, split_status: str, run_count: int = 1) -> str:
     """Metrics count as evidence only with BOTH human labels (top-level ``vad_label_provenance: "human"``)
     and a verified frozen split (``split_status`` "verified frozen_eval": labels and image content bound
     by a frozen-lock-v2), from ONE run (``run_count`` distinct RunInfos in the cohort). Otherwise the
-    metrics are still reported, labelled NOT A FINDING with what is missing.
+    metrics are still reported, labelled NOT A FINDING with what is missing. A verified DEVELOPMENT
+    cohort gives a third value, a development estimate: usable for iteration and comparison, never
+    promotion evidence (it deliberately does not start with "evidence:").
     """
+    development = split_status.startswith(DEVELOPMENT_STATUS)
     missing = []
     if label_doc.get("vad_label_provenance") != "human":
         missing.append('the label file does not declare "vad_label_provenance": "human" (synthetic or unreviewed labels)')
-    if split_status != "verified frozen_eval":
+    if split_status != "verified frozen_eval" and not development:
         missing.append(f"no verified frozen split ({split_status})")
     if run_count > 1:
         missing.append(f"the cohort mixes {run_count} runs (different RunInfo); evaluate each run separately")
+    if not missing and development:
+        return ("development estimate: human labels on content-verified development images; for iteration "
+                "and compare only, never promotion evidence")
     if not missing:
         return "evidence: human labels on a verified frozen split"
     return "NOT A FINDING: " + "; ".join(missing) + "; these numbers describe the run, they are not evidence"
