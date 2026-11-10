@@ -89,6 +89,50 @@ def test_a_cohort_mixing_two_runs_is_marked(tmp_path):
     assert _evaluate(fx, trace, tmp_path / "m.json") == 0
     doc = _doc(tmp_path / "m.json")
     assert doc["mixed_runs"] is True and len(doc["runs"]) == 2
+    # R6-2: still descriptive, but never eligible as evidence, with the reason named
+    assert doc["evidence_status"].startswith("NOT A FINDING") and "mixes 2 runs" in doc["evidence_status"]
+
+
+# --- R6-2: the config given to evaluate must be the one the shadow run used ---------------------------
+
+
+def _config_file(tmp_path, fx, change):
+    import yaml
+    data = yaml.safe_load(fx["config"].read_text(encoding="utf-8"))
+    change(data)
+    path = tmp_path / "other_config.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    return path
+
+
+def _changed_seed(data):
+    data["audit"]["seed"] = "another-seed"
+
+
+def _changed_prompt(data):  # the same class ids, so the labels still load
+    data["task"]["classes"][0]["positive_prompts"] = ["a blue X9 widget, close up"]
+
+
+def _overlapping_task(data):  # shares a class name with the run's task, adds another
+    data["task"]["classes"] = [data["task"]["classes"][0],
+                               {**data["task"]["classes"][1], "class_id": "other_class", "display_name": "Other"}]
+
+
+@pytest.mark.parametrize("change", [_changed_seed, _changed_prompt, _overlapping_task],
+                         ids=["seed", "prompt", "overlapping task"])
+def test_evaluate_refuses_a_config_the_shadow_run_did_not_use(tmp_path, capsys, change):
+    fx, trace = _shadow(tmp_path)
+    other = _config_file(tmp_path, fx, change)
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["evaluate", "--config", str(other), "--labels", str(_labels_for_fixture(fx["root"], "human")),
+                  "--trace", str(trace), "--out", str(tmp_path / "m.json")])
+    assert exc.value.code == 2 and "does not match the run" in capsys.readouterr().err
+    assert not (tmp_path / "m.json").exists()
+
+
+def test_the_config_file_shadow_overrode_is_accepted(tmp_path):
+    fx, trace = _shadow(tmp_path)  # the fixture config has routing_enabled: false; shadow forced it on
+    assert _evaluate(fx, trace, tmp_path / "m.json") == 0
 
 
 def test_parent_records_the_parent_files_metrics_id_after_verifying_it(tmp_path, capsys):

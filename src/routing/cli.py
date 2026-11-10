@@ -206,6 +206,13 @@ def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         parent_id = parent["metrics_id"]
     cfg = load_config(args.config)
     task = cfg.task
+    lines = Path(args.trace).read_text(encoding="utf-8").splitlines()
+    records = [RouteRecord.model_validate_json(line) for line in lines if line.strip()]
+    # The config supplies the task, seed and thresholds of the report, so it must be the file the shadow
+    # run used: each record's config hash must be one of its shadow variants (routing/--vlm overrides).
+    if unmatched := sorted({r.run.config_hash for r in records if shadow_run_config(cfg, {r.run.config_hash}) is None}):
+        parser.error(f"--config does not match the run that made --trace (run config hashes {unmatched}); "
+                     "evaluate needs the config file the shadow run used")
     label_doc = json.loads(Path(args.labels).read_text(encoding="utf-8"))
     try:
         ground_truth = load_ground_truth(label_doc, task)
@@ -216,8 +223,6 @@ def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     split = {"status": "unverified: no --split-manifest/--frozen-lock; every labelled image is scored, "
                        "whatever its split", "manifest_sha256": None}
     manifest = None
-    lines = Path(args.trace).read_text(encoding="utf-8").splitlines()
-    records = [RouteRecord.model_validate_json(line) for line in lines if line.strip()]
     try:
         results = image_results(records)  # refuses repeated images before anything is scored or written
     except LabelError as e:
@@ -254,12 +259,12 @@ def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     cohort = [r for r in records if r.image.id in ground_truth]
     outside = sorted(r.image.id for r in records if r.image.id not in ground_truth)
     cohort_results = {r.image.id: results[r.image.id] for r in cohort}
-    metrics = {"evidence_status": evidence_status(label_doc, split["status"]), "split": split,
+    runs = [json.loads(r) for r in sorted({canonical_json(rec.run) for rec in cohort})]
+    metrics = {"evidence_status": evidence_status(label_doc, split["status"], run_count=len(runs)), "split": split,
                **evaluate(ground_truth, task.class_ids, cohort_results, args.iou),
                "cost": route_report(cohort), "out_of_cohort": {"results": len(outside), "image_ids": outside}}
     # run-metrics-v1: immutable, identified by its own content; ids, scores and match codes only.
     cohort_ids = sorted(ground_truth)
-    runs = [json.loads(r) for r in sorted({canonical_json(rec.run) for rec in cohort})]
     per_image = per_image_outcomes(ground_truth, cohort_results, task.class_ids)
     for image_id, outcome in per_image.items():
         outcome["group_id"] = manifest["images"][image_id].get("group_id") if manifest else None

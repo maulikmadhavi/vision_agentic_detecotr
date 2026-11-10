@@ -333,6 +333,12 @@ def test_not_a_finding_names_the_missing_part(labels, split, says, not_says):
     assert status.startswith("NOT A FINDING") and says in status and not_says not in status
 
 
+def test_a_cohort_mixing_runs_is_not_a_finding_even_with_human_labels_and_a_verified_split():
+    status = evidence_status(HUMAN, VERIFIED, run_count=2)
+    assert status.startswith("NOT A FINDING") and "mixes 2 runs" in status
+    assert "vad_label_provenance" not in status and "frozen split" not in status
+
+
 def test_not_a_finding_names_both_parts_when_both_are_missing():
     status = evidence_status({}, NO_SPLIT)
     assert "vad_label_provenance" in status and "no verified frozen split" in status
