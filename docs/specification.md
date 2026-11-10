@@ -20,14 +20,46 @@ Keep raw embedding similarity, calibrated probability, quality signals and diffi
 
 ## Processing graph
 
-The following describes the implementation at `f976203`. The runtime is ordinary Python orchestration, not a state-machine framework. State names in the diagrams explain control flow; only the schemas, cached step payloads, records and errors described below are persisted. Source links are relative to this document.
+The following describes the implementation reviewed at `be8be70` on 2026-11-10. The runtime is ordinary Python orchestration, not a state-machine framework. State names in the diagrams explain control flow; only the schemas, cached step payloads, records and errors described below are persisted. Source links are relative to this document. Known comparison defects are recorded in [reviewer_suggestion.md](reviewer_suggestion.md); diagrams describe current behavior, not proof that every boundary is enforced.
+
+### Commands and artifact flow
+
+`vad-route` enters [cli.main](../src/routing/cli.py). These are separate invocations, not an automatically scheduled training loop. Dashed edges below denote user-supplied inputs or subsequent invocations.
 
 ```mermaid
 flowchart TD
-  CLI["vad-route: parse arguments and load task"] --> Mode{"Command?"}
-  Mode -->|export-schema| Schemas["Write JSON Schemas"]
-  Mode -->|legacy| Legacy["Primary detector only; export legacy annotations"]
-  Mode -->|shadow| Lock["Enable routing for this run; acquire output lock"]
+  Images["Image manifest and task config"] --> Group["sample group: source/duplicate groups and content hashes"]
+  Group --> Split["sample split + labels: calibration, development, frozen_eval"]
+  Split --> SplitFiles["split-v2 manifest and frozen-lock-v2"]
+  Images --> Shadow["shadow: routed inference"]
+  SplitFiles -. optional split membership and export tags .-> Shadow
+  Shadow --> Trace["RouteRecord trace, accepted annotations, cost/error report"]
+  Trace --> Queue["sample review-queue: prioritize annotation work"]
+  Queue -. human labels .-> Merge["sample merge: combine supplied labels"]
+  Merge -. labels .-> Fit["fit-relevance: calibration-only fit"]
+  Trace --> Fit
+  SplitFiles --> Fit
+  Fit --> Calibrator["Versioned calibrator with input identities"]
+  Calibrator -. next shadow invocation .-> Shadow
+  Trace --> Findings["review findings: open model/audit findings"]
+  Findings -. adjudication log .-> Apply["review apply: validate decisions and re-audit"]
+  Apply --> Reviewed["Separate ReviewedRecords and annotation export"]
+  Trace --> Eval["evaluate + ground truth: development or frozen cohort"]
+  SplitFiles -. cohort and content verification .-> Eval
+  Eval --> Metrics["New run-metrics-v1 file"]
+  Metrics --> Compare["compare: previous or best eligible earlier run"]
+  Compare -. development decisions .-> Images
+  Images --> Legacy["legacy: replay primary only, export annotations"]
+  Schema["export-schema"] --> SchemaFiles["Pydantic JSON Schemas"]
+```
+
+`sample merge` combines supplied labels; it does not label images. `review apply` consumes human decisions and preserves the original model trace. `evaluate --trace` currently expects original `RouteRecord` entries, not `reviewed.jsonl`; the reviewed-export/trainer evaluation loop is not automatically connected. Supplying no split to evaluation produces a descriptive, content-unverified report over all labelled images. Development evaluation requires a v2 split and frozen lock.
+
+### Shadow inference flow
+
+```mermaid
+flowchart TD
+  CLI["vad-route shadow: validate args, config and manifest; build providers"] --> Lock["Enable routing for this run; acquire output lock"]
   Lock --> Image["Next manifest image: load, validate and hash"]
   Image --> Cache{"Final record exists for this run key?"}
   Image -->|unreadable or corrupt| Error["Persist per-image ErrorRecord"]
@@ -90,7 +122,7 @@ stateDiagram-v2
 | Loading / `image_inputs.load_image` | Read bytes, verify/decode, convert to RGB and build an `ImageRef` with byte digest. | An invalid image produces an error; no detection is attempted. |
 | Lookup / `process`, `record_key` | Combine image identity with `RunInfo`, including configuration/model identities and available artifact digests. | A final-record hit returns immediately after image validation. |
 | Stage A / `scoring.stage_a` | Quality signals plus optional per-class relevance; a scorer exception yields unavailable relevance and a warning. | `stage_a` cache includes failures represented as unavailable evidence; resume reuses it. |
-| Primary / `_cached_detect` | Run or replay primary predictions and map valid boxes to original-image coordinates. An explicit empty prediction row is valid; an omitted replay row raises. | `primary` cache stores detections, warnings and measured GPU time. |
+| Primary / `_run_cached_detector` | Run or replay primary predictions and map valid boxes to original-image coordinates. An explicit empty prediction row is valid; an omitted replay row raises. | `primary` cache stores detections, warnings and measured GPU time. |
 | Stage B / `box_features`, `estimate_difficulty` | Calculate features and `difficulty_pre_secondary`; zero boxes imply unknown difficulty. | Derived again from cached inputs until the final record is saved. |
 | Route / `policy.route` | Apply ordered rules and available capabilities; persist before optional escalation. | `route` contains actions, reasons, priority and expected budget. |
 | Secondary and slicing | Check the action, adapter and budget; normalize/fuse tile results. Optional failures accumulate review reasons. | `secondary` and `sahi` caches; slicing retains raw predictions, merged predictions, count and stop reason. |
@@ -115,7 +147,7 @@ Exceptions not drawn individually in the state diagram follow `process`'s outer 
 
 Unknown relevance is never treated as low. An omitted calibrated class adds `human_review` and never falls back to raw probability thresholds. Poor-quality sampling can add review to any branch.
 
-Budgets are cooperative guards: Stage A and primary still run for every valid uncached image. Elapsed time is checked before optional work and before each slice; an in-flight call can exceed that budget. GPU limits use adapter-measured time only, and become unenforceable when the aggregate is unknown (`None`). Slicing returns partial results with a stop reason; it does not silently claim a complete pass. VLM call counts include cached answers reached through `ask`, preserving the logical per-image cap on resume. Provider timeouts are separate from the pipeline elapsed budget; the WeMM client currently retries a transport failure once.
+Budgets are cooperative guards: Stage A and primary still run for every valid uncached image. Elapsed time is checked before optional work and before each slice; an in-flight call can exceed that budget. GPU limits use adapter-measured time only, and become unenforceable when the aggregate is unknown (`None`). Slicing returns partial results with a stop reason; it does not silently claim a complete pass. VLM call counts include cached answers reached through `_verify_request`, preserving the logical per-image cap on resume. Provider timeouts are separate from the pipeline elapsed budget; the WeMM client currently retries a transport failure once.
 
 ### Candidate status state machine
 
@@ -159,7 +191,7 @@ flowchart TD
   Review -->|no| Complete
 ```
 
-The current pipeline does not pass human outcomes or reference annotations into `audit`; those parameters are helper-level capabilities. Reviewer ingestion and re-auditing are future work. With no human outcome and no calibrated audit policy, even an image whose boxes are all accepted remains `needs_review` unless unresolved evidence requires the stronger `unresolved` status.
+The initial shadow pass has no human adjudications. With no human outcome and no calibrated audit policy, even an image whose boxes are all accepted remains `needs_review` unless unresolved evidence requires the stronger `unresolved` status. The separate [review](../src/routing/review.py) workflow now ingests adjudications: `review findings` lists open findings and `review apply` checks record/candidate/class/config identity, applies decisions and re-runs the completeness audit. Later decisions supersede earlier decisions for a candidate; contradictory class absence and accepted geometry are refused. Human-added boxes are validated and retain their provenance. A complete decision must still satisfy the audit's open-evidence checks. Reviewed records and exports are separate artifacts; the source trace is unchanged.
 
 ### Restart and VLM request recovery
 
@@ -200,11 +232,47 @@ Shadow mode writes only records returned for the current invocation:
 - `route_trace.jsonl`: complete `RouteRecord` values, including proposals, provenance, verifications and completeness.
 - `report.json`: route/cost summaries, relevance-scorer failure counts and the current invocation's per-image errors.
 
-An image may export accepted boxes while still being `needs_review` or `unresolved`; accepted geometry does not prove full coverage. The current export does **not** enforce a complete-images-only training gate. Frozen-split enforcement, human adjudication, actual trainer integration and promotion remain requirements described below and tracked on the board.
+An image may export accepted boxes while still being `needs_review` or `unresolved`; accepted geometry does not prove full coverage. The current export does **not** enforce a complete-images-only training gate. Optional split manifests validate membership and tag exports; the training-label loader rejects known frozen tags/IDs/groups when the corresponding provenance is supplied. It cannot identify renamed copies by image bytes because annotation exports lack content hashes. Actual trainer integration and measured promotion remain downstream requirements.
+
+### Evaluation and comparison state machine
+
+```mermaid
+stateDiagram-v2
+  [*] --> ValidateInputs
+  ValidateInputs --> Refused: duplicate image IDs or originating config mismatch
+  ValidateInputs --> SelectCohort: labels and trace valid
+  SelectCohort --> Descriptive: no split, or legacy frozen lock
+  SelectCohort --> CheckContent: v2 split and lock supplied
+  CheckContent --> Refused: frozen label lock or image identity mismatch
+  CheckContent --> Development: development selected and frozen ID/group excluded
+  CheckContent --> Frozen: frozen selected and content verified
+  Descriptive --> Score
+  Development --> Score
+  Frozen --> Score
+  Score --> WriteMetrics: official COCO, custom diagnostics, annotation P/R, costs
+  WriteMetrics --> CompareInputs: separate compare invocation
+  CompareInputs --> Refused: content ID invalid, mixed runs, or series differs
+  CompareInputs --> DescriptiveDelta: image content unverified, previous comparison
+  CompareInputs --> SelectBaseline: image content verified
+  SelectBaseline --> CustomInterval: previous, or best official AP with guardrails
+  CustomInterval --> ComparisonReport: custom interval available or explicitly unavailable
+  DescriptiveDelta --> ComparisonReport
+  ComparisonReport --> [*]
+  Refused --> [*]
+```
+
+- **Input identity:** evaluation binds supplied configuration to trace run hashes, allowing supported shadow overrides. Frozen labels must match their lock; v2 image hashes and dimensions must match the split and trace. Genuine legacy locks/manifests remain loadable as unverified content, with no fabricated hashes or rewriting. Development labels are not frozen, and their digest distinguishes comparison series.
+- **One cohort:** accuracy and cost use the selected labelled cohort. A labelled image without a routed result stays in the accuracy denominator as an operational failure; out-of-cohort records are listed separately. Cost summaries describe available cohort records, so consult failure counts alongside costs.
+- **Prediction sources:** official `coco.map50_95` and `coco.map50` are reported for primary, routed all-unrejected and routed accepted-only boxes. Routed ranking uses the maximum confidence among source detections (`routed-score-v1`); unscored routed boxes are counted and excluded from AP. Primary AP becomes unavailable if any primary prediction is unscored. Score-free accepted annotations receive precision/recall, not AP.
+- **Metrics identity:** evaluation refuses an existing output path and writes a content-identified `run-metrics-v1`, with originating runs, cohort/image/label digests, evaluator settings, and per-image custom match outcomes. A parent ID provides lineage; it does not authorize comparison. Evidence status distinguishes descriptive/synthetic/development results from human-labelled verified frozen evidence; content verification alone is not a promotion result.
+- **Comparison:** `compare` checks input content IDs, rejects mixed-run arms and differing series, and requires guardrails for `--against best`. It reports official COCO deltas and separately named custom deltas. Seeded paired source-group bootstrap recomputes dataset AP from custom outcomes; it does not average per-image AP. Its interval and `verdict` concern **custom-vad-1**, not COCO. Opposite-sign changes produce a warning. Unverified comparisons are descriptive; best-run selection is refused for them. Current group-compatibility, numeric-validation and unavailable-AP defects are in R7-1–R7-3 of the reviewer feedback.
+- **Iteration:** use development data for repeated previous/best comparisons, and frozen evaluation for predeclared promotion checks. Optional meaningful-gain/patience settings report an operational plateau on official AP; they do not prove statistical convergence. Guardrail results and the custom accuracy verdict are separate outputs: an `improved` verdict is not automatic permission to promote.
 
 ### Two-stage scoring
 
-**Stage A, before detection:** validate the image; compute resolution, blur/exposure/compression indicators, a domain-distance indicator if a reference distribution exists, and per-class text–image similarity using class-specific positive prompts and confusing negative prompts. The stage outputs raw features plus calibrated relevance probabilities when a calibrator exists. It may flag a likely hard image but must not claim an object-size or occlusion measurement without an object proposal.
+**Stage A, before detection:** validate the image; compute resolution, blur/exposure indicators and per-class relevance. The current remote scorer uses positive text prompts only; compression, reference-distribution distance and negative-prompt contrasts remain proposed signals. The stage outputs raw features plus calibrated relevance probabilities when a compatible calibrator is loaded. It may flag a likely hard image but must not claim an object-size or occlusion measurement without an object proposal.
+
+`fit-relevance` fits per-class and any-target logistic models with ridge regularization using calibration-only rows. It checks score scale, scorer identity, task/prompts, originating config and split-v2 image content, and refuses frozen bytes even under another ID. Insufficient class support is recorded rather than silently filled by raw-threshold fallback. Loading the artifact checks scale/scorer/prompts and records its file digest. A fitted artifact's existence does not demonstrate target-domain reliability or calibrated difficulty.
 
 **Stage B, after primary detection:** calculate normalized box area, predicted crowding/overlap, confidence or margins when supported, class ambiguity, count, and the contradiction between high relevance and zero boxes. Use Stage A and these features to estimate difficulty. If a secondary detector is run, recompute with class-aware matching and disagreement. Store `difficulty_pre_secondary` and `difficulty_final`; never silently replace the former, because its value explains why the secondary path was selected.
 
@@ -212,7 +280,7 @@ For matched boxes, use an explicitly configured IoU threshold and class mapping.
 
 ## Contracts and repository layout
 
-Suggested package, adapted to the repository. As built:
+As built at the reviewed revision:
 
 ```text
 src/routing/
@@ -228,6 +296,12 @@ src/routing/
   pipeline.py      bounded orchestration and resumability
   store.py, image_inputs.py  persistence + job lock; manifest/image loading
   evaluation.py    isolation, frozen lock, route/cost report, VLM agreement
+  sample.py        source/duplicate grouping, content-bound splits, label queues/merge
+  calibration.py   relevance fitting, artifact validation and calibrated scores
+  review.py        human findings, adjudication validation and re-audit
+  metrics.py       ground truth, custom matching/AP, annotation metrics, per-image outcomes
+  coco_eval.py     official pycocotools bbox AP with explicit settings
+  compare.py       compatible-run deltas, custom group bootstrap, guardrails and plateau
   export.py        COCO-style versioned export + loader
   cli.py           vad-route
 src/services_embedding/      client.py: WeMM MCP relevance scorer
@@ -238,6 +312,17 @@ src/service_detector_gdino/    client.py (RemoteDetector), contracts.py (svc-1.0
 configs/routing/example.yaml
 tests/routing/, tests/services/
 ```
+
+The 34-file source inventory also includes each package's `__init__.py`. CLI functions own file/argument boundaries; `pipeline.py` owns per-image sequencing; policy/scoring/matching/completeness own domain decisions. Service clients implement [interfaces.py](../src/routing/interfaces.py), while `schemas.py` and `task_config.py` define shared contracts. Replay stays in routing and the GPU server has its own environment.
+
+| Service path | Runtime contract and failure behavior |
+|---|---|
+| [Embedding client](../src/services_embedding/client.py) | Remote MCP `compute_similarity`, image data URI plus positive prompts; validate backend/model/dimension and optional build identity, require finite complete scores, retry a transport failure once. Stage A records unavailable relevance if the scorer fails. |
+| [VLM client](../src/service_detector_vlm/openai_service_call.py) and [result parser](../src/routing/verification_results.py) | OpenAI-compatible HTTP transport, bounded crop/context and strict presence-answer parsing. No geometry authoring; failed/malformed calls become uncertain. Pipeline checks request/class/candidate/region binding and handles durable attempt markers. |
+| [Detector client](../src/service_detector_gdino/client.py) and [wire contracts](../src/service_detector_gdino/contracts.py) | POST `/detect` with encoded image content and identity; check response request, image size and model/revision/optional weight digest before mapping boxes. Primary failure queues the image; optional escalation failure creates review evidence. |
+| [Detector server](../src/service_detector_gdino/server.py), [runtime](../src/service_detector_gdino/runtime.py), [smoke](../src/service_detector_gdino/smoke.py) | Separate GPU process: validate image bytes/dimensions, serialize inference, run requested classes with a pinned model and verified weights, report predictions/timing or failure. Smoke checks transport/model behavior, not real-data accuracy. |
+
+**Review coverage:** source inventory/AST analysis plus manual tracing of the paths above and the CPU/mock suite (592 passed, seven live tests deselected). Static reachability alone cannot prove code unused: protocol implementations, callbacks and framework entry points are invoked dynamically. Live GPU inference, deployment behavior, real-image accuracy and trainer integration were not verified by this audit.
 
 Define Pydantic v2 models and export their JSON Schemas. Reject unknown class IDs, nonfinite scores, invalid boxes, missing model versions and unsupported coordinate systems. Store a `schema_version` and content/hash IDs on every persisted record. Use canonical `xyxy` **pixel coordinates in the original image**, with `0 <= x1 < x2 <= width` and the analogous y rule. Convert sliced boxes before matching; keep slice origin and model provenance. Keep model confidences as raw model outputs rather than calling them calibrated probabilities.
 
@@ -308,7 +393,7 @@ Promotion gate: adaptive routing must meet project-set recall and false-negative
 
 ## Research references and implementation mapping
 
-**Evidence boundary (2026-11-09):** the architecture combines established techniques with project-specific heuristics. The cited work supports individual components or related ideas; none evaluates this repository's complete router, its weights, thresholds or completeness guarantee. Source mappings below reflect the inspected working tree, where service flattening and OpenCLIP removal are in progress. Update links after moves; the proposed flat package layout is not yet the runtime layout. OpenCLIP is not a required dependency for these references.
+**Evidence boundary (reviewed 2026-11-10):** the architecture combines established techniques with project-specific heuristics. The cited work supports individual components or related ideas; none evaluates this repository's complete router, its weights, thresholds or completeness guarantee. Source mappings below reflect the implemented flat service packages. OpenCLIP is not a required dependency for these references. This code review updates implementation mappings, not the literature search.
 
 ### Reference documents
 
@@ -329,14 +414,14 @@ Promotion gate: adaptive routing must meet project-set recall and false-negative
 | Area / references | Current code and behavior | What is not implemented or established |
 |---|---|---|
 | Quality / R1 | [scoring.quality_signals](../src/routing/scoring.py) computes grayscale Laplacian variance, `blur = 1 / (1 + variance / 100)`, extreme-pixel fraction at ≤5 or ≥250, and shortest-side resolution. [policy.route](../src/routing/policy.py) uses quality for sampled auditing; blur also enters difficulty. | These are diagnostic proxies. Textureless scenes can look blurry; legitimate black/white content can look poorly exposed. No learned quality estimator, compression score, domain-distance population or measured relation to detector failure exists. |
-| Relevance / R2 | [WeMMMCPRelevanceScorer.score](../src/services_embedding/client.py) sends an image data URI and positive prompts; takes maximum cosine per class. [stage_a](../src/routing/scoring.py) takes the maximum class score for raw image bands. Missing/error evidence cannot silently become low relevance. | Negative prompts are not used by this scorer; image–image reference matching is planned. Neither prompt pooling nor raw bands are validated on the target distribution. No fitted relevance calibrator is shipped. |
+| Relevance / R2 | [WeMMMCPRelevanceScorer.score](../src/services_embedding/client.py) sends an image data URI and positive prompts; takes maximum cosine per class. [stage_a](../src/routing/scoring.py) takes the maximum class score for raw image bands and supports a fitted relevance artifact. Missing/error evidence cannot silently become low relevance. | Negative prompts are not used by this scorer; image–image reference matching is planned. Prompt pooling, raw bands and fitted probabilities need target-domain validation. |
 | Detection / R3 | [Grounding DINO server](../src/service_detector_gdino/server.py) loads a pinned model, checks the weights digest and runs once per requested class. [RemoteDetector](../src/service_detector_gdino/client.py) checks response identity. | Synthetic checks establish transport/behavior only. Real class confusion, false positives, prompt robustness and small-object recall need human-labelled evaluation. No independent secondary backend is supplied by this implementation. |
 | Small-object recovery / R4 | [slicing.run_sliced](../src/routing/slicing.py) tiles, checks budgets, maps coordinates and merges by IoS while retaining raw parents. Acceptance tests cover offsets, overlap, recovery and caps. | This is a native SAHI-style implementation; it does not import the SAHI library. Paper-level parity, slicing fine-tuning and target-domain accuracy/cost gains have not been demonstrated. |
 | Difficulty and disagreement / R5, R7 | [box_features / estimate_difficulty](../src/routing/scoring.py), [matching.disagreement](../src/routing/matching.py) and [pipeline](../src/routing/pipeline.py) combine small boxes, overlap, minimum confidence, blur, class ambiguity and optional secondary disagreement. Zero boxes/confidence absence produce unknown difficulty. | The weighted score is heuristic and always labelled uncalibrated when numeric. No fitted difficulty model or demonstrated ranking of actual missed/mislocalized instances exists. ALWOD is related work rather than the implemented algorithm. |
-| Calibration / R6, R7 | [RelevanceCalibrator protocol](../src/routing/interfaces.py), [Stage A guards](../src/routing/scoring.py), configuration thresholds and schema range checks provide a calibration boundary. Tests exercise incomplete/inconsistent outputs. | Interface/guard tests are not calibration experiments. Relevance fitting, coherent aggregate probabilities, reliability diagrams, Brier/ECE metrics and box-sensitive detector calibration are absent. Difficulty has no corresponding fitted calibrator path. |
+| Calibration / R6, R7 | [calibration.py](../src/routing/calibration.py) fits per-class and any-target logistic relevance models, binds input/scale/scorer/prompt identity and checks calibration split content. [Stage A guards](../src/routing/scoring.py) reject incomplete/inconsistent evidence; omitted calibrated classes remain unknown. | Fitting machinery and synthetic checks are not calibration experiments. Target-domain reliability diagrams, Brier/ECE studies and box-sensitive detector calibration remain missing. Difficulty has no fitted calibrator path. |
 | Verification / R8 | [VLM client](../src/service_detector_vlm/openai_service_call.py), [answer parser](../src/routing/verification_results.py) and [_verify](../src/routing/pipeline.py) constrain answers and bind them to requests. [vlm_agreement](../src/routing/evaluation.py) reports human agreement, decision coverage and present/absent precision with Wilson bounds. | Agreement tooling has no target-domain human label study attached. It does not measure localization or discover every missing instance. POPE-style negative sampling and prompt/crop sensitivity studies remain to be run. |
-| Human review / R9 | [policy](../src/routing/policy.py) and [completeness.audit](../src/routing/completeness.py) retain uncertain/open findings; only accepted geometry is exported. Audit helper accepts human outcomes/reference boxes. | The pipeline/CLI does not ingest per-finding adjudication or human outcomes. No reviewer workload/accuracy study or learned deferral policy is implemented. A review flag is not a completed review. |
-| Whole-system validation / all references | [evaluation](../src/routing/evaluation.py) provides split/frozen-lock utilities, route/cost reporting and VLM agreement. [tests](../tests/routing/test_acceptance.py) establish selected behavioral invariants. | No end-to-end research validation: detection metrics, enforced split-aware runs, real-image ablations, numeric promotion results and training-benefit comparison remain missing. An export can contain accepted boxes from incomplete images; training must handle that explicitly. |
+| Human review / R9 | [review.py](../src/routing/review.py) and CLI findings/apply ingest per-finding adjudications, validate added boxes, reject contradictions, re-audit and preserve the original trace. [completeness.audit](../src/routing/completeness.py) separates box acceptance from image completeness. | No reviewer workload/accuracy study or learned deferral policy is established. A review flag is not a completed review; reviewed outputs are not automatically trained/evaluated. |
+| Whole-system validation / all references | [sample](../src/routing/sample.py) and [evaluation](../src/routing/evaluation.py) provide content-bound split/frozen-lock utilities. [metrics](../src/routing/metrics.py), [COCO evaluator](../src/routing/coco_eval.py) and [compare](../src/routing/compare.py) provide detection/annotation metrics, run identities and comparison; [tests](../tests/routing/test_acceptance.py) establish selected behavioral invariants. | Real-image ablations, numeric promotion evidence and training-benefit comparisons remain missing. Custom bootstrap intervals do not establish uncertainty on official COCO AP. Exports may contain accepted boxes from incomplete images and lack byte-based training isolation; training must handle these boundaries. |
 
 ### Evidence required before claiming improvement
 
