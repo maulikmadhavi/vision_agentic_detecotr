@@ -1,31 +1,41 @@
 # Reviewer suggestions — open work only
 
-Updated 2026-11-10; reviewed through `4896bfd`. Completed S4, shared accuracy/cost cohort, evidence-status guard, official COCO evaluation, routed scoring and immutable metrics output have been removed from the action list. Requirements/research remain in [specification.md](specification.md); status belongs in [project_board.md](project_board.md).
+Reviewed 2026-11-10 against `be8be70`. Scope: all 34 Python files under `src` inventoried with AST analysis; manual tracing of CLI, routing/recovery, service contracts, sampling, review, calibration, export, evaluation and comparison. Execution flow and implementation boundaries are in [specification.md](specification.md); delivery status belongs on [project_board.md](project_board.md). Previously completed findings have been removed.
 
-## P2 — old split files crash the new metrics writer
+## P2 — R7-1: validate comparison limits before applying guardrails
 
-**Location:** `src/routing/cli.py`, `_run_evaluate`, construction of `series.images_sha256`.
+**Location:** [compare_runs / guardrail_failures](../src/routing/compare.py), [CLI comparison input](../src/routing/cli.py).
 
-**Reproduced:** use a valid pre-content-hash frozen lock together with a genuine `split-v1` manifest, whose image entries contain no SHA-256/dimensions. Evaluation passes the legacy verification branch, then raises **`KeyError: 'sha256'`** when constructing the run-metrics file. It should report unverified image content. The existing legacy regression downgrades only the lock and leaves a v2 manifest with hashes, so it misses this case.
+**Evidence and implication:** guardrail validation checks the version and top-level keys, but not numeric values or nested fields. A YAML `.nan` for `max_fp_per_image_increase` makes a candidate with 12 additional false positives across eight images report `passed: true`: `value > NaN` is false. Separately, `resamples=0` reaches NumPy and raises `IndexError` instead of an actionable input error. Invalid inputs can disable a decision gate or crash comparison.
 
-**Fix:** derive the series image digest only when the required image content exists and its verification status is explicit; otherwise write `null` and retain the unverified status. Never fabricate hashes or upgrade old files. Add a regression with both a real v1 manifest and old lock, plus the existing v2/old-lock combination. Both must produce a descriptive unverified report without modifying inputs; comparison must reject them as content-verified series.
+**Action:** validate finite, nonnegative numeric guardrail limits, exact nested recall keys, a positive integer patience and resample count, and a finite positive meaningful-gain threshold. Reject booleans as numeric settings. Raise `CompareError` before computing results; retain explicit unavailable-value failures.
 
-## Before implementing run comparison
+**Acceptance:** YAML `.nan`/`.inf`, missing/extra nested keys, strings, booleans, negative limits and zero/negative resamples produce clear CLI errors without an output file. Valid limits still detect the false-positive regression.
 
-| Gap / implication | Suggested action and acceptance evidence |
-|---|---|
-| **Stored bootstrap outcomes describe the custom evaluator, not official COCO.** `per_image_outcomes` uses `match_image`; `map_from_outcomes` explicitly reconstructs custom AP. Crowd matching and detection caps differ from the official headline metrics. | Do not attach confidence intervals from these outcomes to COCO mAP50–95/mAP50. Persist sufficient official COCO match outcomes/settings, or retain inputs and rerun the official evaluator for resampled groups. Test reconstruction against official AP with crowd boxes and more than 100 detections. Custom intervals may remain separately labeled. |
-| **Comparison compatibility is not yet enforced.** Parent validation checks integrity, not whether datasets/evaluators match. `series.images_sha256` is null without a split; a series key alone does not prove comparability. | In the comparison command require matching verified image/label/cohort identities, task, evaluator settings/version and prediction source/scoring rule. Compare matching working-IoU thresholds for diagnostic metrics. Reject incompatible mixed-run arms or explicitly separate them. Parent linkage alone must never authorize comparison. |
-| **Development iteration needs explicit cohort support.** Supplying a split currently selects frozen images; omitting it loses verified content/group provenance. | Add explicit development/frozen cohort selection with content checks and group IDs. Fit on calibration, iterate on development and reserve frozen evaluation for predeclared promotion checks. Verify that development selection excludes frozen images and preserves group-bootstrap metadata. |
-| **Run metadata can be misleading.** Evaluation takes `seed` from the supplied config without checking that config against the trace; task compatibility is also not enforced. Mixed runs are marked but can still receive an evidence label. | Validate task and originating config with supported shadow overrides, or derive run metadata from an authoritative recorded config. Reject incompatible traces for promotion/comparison; descriptive mixed-run reports must state they are ineligible. Test a changed evaluation seed/config and task with overlapping class names. |
+## P2 — R7-2: bind source groups into comparison compatibility
 
-Use official **mAP50–95 as primary** and **mAP50 as companion**, separately for primary and the selected routed variant. Keep the new `routed-score-v1` rule explicit: maximum source confidence is a defined ranking rule, not calibrated comparability between different detector models. Report unscored exclusions and accepted-annotation precision/recall alongside AP.
+**Location:** [compare_runs / _interval](../src/routing/compare.py), [evaluation series construction](../src/routing/cli.py).
 
-For each compatible development iteration, show deltas against the previous and best eligible run, with per-class/size recall, FP/image, review workload and cost guardrails. Predeclare a meaningful improvement threshold and patience window; a plateau within paired source-group uncertainty is a stopping rule, not proof of convergence. Do not average per-image AP to estimate dataset AP. No dashboard or tracking server is required initially.
+**Evidence and implication:** with identical series fields, changing the candidate's eight source groups into one group is accepted; the returned interval still reports eight groups. `_interval` samples the baseline partition exclusively. Image/label identity does not establish an identical grouping: a corrected grouping manifest can silently invalidate the claimed paired source-group uncertainty.
 
-## Other open boundaries
+**Action:** require identical per-image key sets and image-to-group mappings before resampling; bind a canonical group-map digest into newly emitted series metadata. For existing metrics, compare their stored mappings explicitly. Do not require equality of the entire manifest, which can include unrelated changes. Missing group evidence must remain explicitly unavailable.
 
-- **Training copies of frozen images:** annotation exports still need content hashes and training-side comparison against frozen hashes. Reject the same bytes under another ID/group and require verifiable split provenance; tags alone do not cover copied/renamed images.
-- **Real-data evidence:** labels, transfer permission, difficulty validation, VLM agreement, promotion targets and trainer integration remain dependencies. Use existing board cards rather than duplicating their plans here.
+**Acceptance:** changed group membership or missing/extra per-image entries are refused with the affected IDs; reordered identical mappings pass and produce the same seeded interval. Test through CLI metrics files with valid content IDs, not only direct function calls.
 
-**Verification:** full CPU/mock suite **548 passed, 7 live tests deselected, one Starlette warning**, 19.20 seconds (`python -B -m pytest -q -p no:cacheprovider` in Pixi, with local socket access for FastAPI). The genuine-v1 compatibility failure was reproduced separately using synthetic fixtures. Only this document was edited; no source changes, live calls or commits.
+## P2 — R7-3: exclude unavailable AP when choosing the best run
+
+**Location:** [compare_runs, `against == "best"`](../src/routing/compare.py).
+
+**Evidence and implication:** the selection key uses `map50_95 or -inf`, treating valid AP `0.0` like unavailable AP `None`. A synthetic comparison using actual evaluator outputs selected an earlier unscored-primary run (`None`) over a later scored run (`0.0`). The selected baseline then has no usable AP/interval, despite an eligible measured baseline being available.
+
+**Action:** exclude runs whose selected-source official AP is unavailable, state that reason in eligibility output, and preserve zero as a valid numeric score. Return a clear error if no measured eligible baseline remains.
+
+**Acceptance:** exercise primary outputs with missing confidence, zero AP and positive AP on the same cohort. Zero must beat unavailable; positive must beat zero; all-unavailable inputs must not select a best run.
+
+## Remaining evidence and integration boundaries
+
+- **Metric interpretation:** keep official COCO **mAP50–95 primary** and **mAP50 companion**, with previous/best development-run deltas. The implemented bootstrap and `verdict` describe **custom-vad-1**, not official COCO uncertainty; name that evaluator in the verdict field/output. If promotion needs COCO confidence intervals, resample groups through the official evaluator or persist sufficient compatible outcomes and prove reconstruction parity. Current per-size guardrails describe the primary detector only; add routed size metrics before interpreting them as routed recall protection. A patience plateau is an operational stopping rule, not proof of convergence.
+- **Frozen images entering training:** exported annotation images still lack content hashes. Add byte identity and verified split provenance to exports and require training-side rejection of frozen content, including renamed/copied images. Existing ID/group/tag checks cannot enforce that guarantee. No actual trainer integration is supplied.
+- **Empirical validation:** behavior tests do not establish detection gains. Human labels, image-transfer permission, target-domain relevance/difficulty/VLM validation, numeric promotion thresholds and controlled annotation-to-training comparisons remain dependencies; use the existing board cards for ownership.
+
+**Verification:** 592 CPU/mock tests passed; seven live tests deselected; one Starlette deprecation warning (22.20 s, Pixi `python -B -m pytest -q -p no:cacheprovider`, local socket access for FastAPI). Separate in-memory synthetic probes reproduced all three findings and the zero-resample crash. These probes exercise current evaluator/comparison functions; CLI regressions above are proposed acceptance tests. No GPU/live-service accuracy claims were checked. This review changes documentation only and makes no commits.
