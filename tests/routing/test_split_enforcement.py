@@ -451,7 +451,8 @@ def test_frozen_eval_is_the_default_cohort_and_unchanged_but_for_series_cohort(t
     assert _evaluate(paths, tmp_path / "explicit.json", *explicit_args) == 0
     assert (tmp_path / "explicit.json").read_bytes() == (tmp_path / "default.json").read_bytes()
     assert default["series"]["cohort"] == "frozen_eval" and "labels_locked" not in default["split"]
-    assert set(default["series"]) == {"cohort", "cohort_ids_sha256", "labels_sha256", "images_sha256", "evaluators"}
+    assert set(default["series"]) == {"cohort", "class_ids", "iou_threshold", "coco_settings", "cohort_ids_sha256",
+                                      "labels_sha256", "images_sha256", "evaluators"}
 
 
 def test_without_a_split_the_series_cohort_is_unsplit(tmp_path):

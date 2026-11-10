@@ -155,6 +155,8 @@ def test_the_series_key_pins_cohort_ids_labels_and_evaluators(tmp_path):
     cohort = sorted(["easy", "zero", "small", "corrupt"])
     assert series["cohort_ids_sha256"] == stable_id("ids", cohort, 64).split("-", 1)[1]
     assert len(series["labels_sha256"]) == 64 and series["images_sha256"] is None  # no split: no content binding
+    from routing.coco_eval import SETTINGS
+    assert (series["class_ids"], series["iou_threshold"], series["coco_settings"]) == (list(CLASSES), 0.5, SETTINGS)
     assert series["evaluators"] == {"custom": "custom-vad-1",
                                     "coco": "pycocotools " + importlib.metadata.version("pycocotools"),
                                     "routed_rule": "routed-score-v1"}

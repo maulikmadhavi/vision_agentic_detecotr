@@ -15,11 +15,15 @@ import os
 import sys
 from pathlib import Path
 
+import yaml
+
 from service_detector_gdino.client import RemoteDetector
 from service_detector_vlm.openai_service_call import OpenAICompatibleVerifier
 from services_embedding.client import WEMM_TEXT_SCALE, WeMMMCPRelevanceScorer
 
 from .calibration import CalibrationError, FittedRelevanceCalibrator, fit_relevance
+from .coco_eval import SETTINGS as COCO_SETTINGS
+from .compare import SOURCES as COMPARE_SOURCES, CompareError, compare_runs
 from .evaluation import (
     CONTENT_FIELDS, IsolationError, check_image_content, load_frozen, lock_frozen_set, route_report,
 )
@@ -59,6 +63,16 @@ def _parser() -> argparse.ArgumentParser:
     e.add_argument("--cohort", choices=["frozen_eval", "development"], default="frozen_eval",
                    help="with a split: score the frozen images (promotion checks) or the development images "
                         "(iteration; a development estimate, never promotion evidence)")
+    cmp = sub.add_parser("compare", help="compare run-metrics files of one series (the last is the candidate)")
+    cmp.add_argument("runs", nargs="+", help="run-metrics-v1 files written by `vad-route evaluate`, oldest first")
+    cmp.add_argument("--source", choices=sorted(COMPARE_SOURCES), default="routed_all",
+                     help="which prediction output to compare (part of the series)")
+    cmp.add_argument("--against", choices=["previous", "best"], default="previous",
+                     help="baseline: the file before the candidate, or the best run passing --guardrails")
+    cmp.add_argument("--guardrails", help="guardrails-v1 YAML written before the runs (its sha256 is recorded)")
+    cmp.add_argument("--seed", type=int, default=0, help="bootstrap seed (recorded)")
+    cmp.add_argument("--resamples", type=int, default=1000, help="bootstrap resamples")
+    cmp.add_argument("--out", required=True, help="compare-v1 JSON to write (never overwritten)")
     sample = sub.add_parser("sample", help="tooling for the human-checked trial sample")
     sample_sub = sample.add_subparsers(dest="sample_cmd", required=True)
     g = sample_sub.add_parser("group", help="group exact and near-duplicate images; list pairs for confirmation")
@@ -150,6 +164,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "evaluate":
         return _run_evaluate(parser, args)
+    if args.cmd == "compare":
+        return _run_compare(parser, args)
     if args.cmd == "sample":
         return _run_sample(parser, args)
     if args.cmd == "review":
@@ -234,17 +250,63 @@ def _development_cohort(parser: argparse.ArgumentParser, manifest: dict, lock: d
     return {i: ground_truth[i] for i in development}, split
 
 
+def _verified_run_metrics(parser: argparse.ArgumentParser, path: str, what: str) -> dict:
+    """A run-metrics file whose version is known and whose metrics_id still matches its content."""
+    doc = json.loads(Path(path).read_text(encoding="utf-8"))
+    body = {k: v for k, v in doc.items() if k != "metrics_id"}
+    if doc.get("version") != RUN_METRICS_VERSION or doc.get("metrics_id") != stable_id("met", body):
+        parser.error(f"{what} {path} is not an unmodified {RUN_METRICS_VERSION} file")
+    return doc
+
+
+def _run_compare(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    out = Path(args.out)
+    if out.exists():
+        parser.error(f"{out} already exists; write each comparison to a new --out")
+    docs = [_verified_run_metrics(parser, path, "input") for path in args.runs]
+    guardrails = digest = None
+    if args.guardrails:
+        data = Path(args.guardrails).read_bytes()
+        guardrails, digest = yaml.safe_load(data), hashlib.sha256(data).hexdigest()
+    try:
+        result = compare_runs(docs, source=args.source, against=args.against, guardrails=guardrails,
+                              seed=args.seed, resamples=args.resamples)
+    except CompareError as e:
+        parser.error(str(e))
+    if result["guardrails"] is not None:
+        result["guardrails"] = {"file_sha256": digest, **result["guardrails"]}
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(result, indent=2), encoding="utf-8")
+
+    def pp(value):
+        return "n/a" if value is None else f"{value:+.2f} pp"
+
+    coco, custom = result["deltas"]["coco"], result["deltas"]["custom"]
+    interval = custom["interval"]
+    shown = interval if isinstance(interval, str) else "[{:+.2f}, {:+.2f}] pp".format(*interval["map50_95_pp"])
+    print(f"{args.source}: coco mAP50-95 {pp(coco['map50_95_pp'])}, mAP50 {pp(coco['map50_pp'])} | custom-vad-1 "
+          f"mAP50-95 {pp(custom['map50_95_pp'])} (interval {shown}), mAP50 {pp(custom['map50_pp'])} | "
+          f"{result['verdict']}")
+    if "primary" in result:
+        primary = result["primary"]
+        print(f"primary: coco mAP50-95 {pp(primary['coco']['map50_95_pp'])}, mAP50 {pp(primary['coco']['map50_pp'])} "
+              f"| custom-vad-1 mAP50-95 {pp(primary['custom']['map50_95_pp'])}")
+    if result["plateau"] is not None and result["plateau"]["stop_tuning"]:
+        print(f"plateau: stop tuning ({result['plateau']['runs_without_gain']} runs without a meaningful gain; "
+              "operational rule only)")
+    for warning in result["warnings"]:
+        print(f"warning: {warning}", file=sys.stderr)
+    if result["guardrails"] is not None and not result["guardrails"]["candidate"]["passed"]:
+        print(f"guardrails failed: {result['guardrails']['candidate']['failed']}", file=sys.stderr)
+    print(f"comparison written to {out}")
+    return 0
+
+
 def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     out = Path(args.out)
     if out.exists():
         parser.error(f"{out} already exists; run metrics are immutable, so write each evaluation to a new --out")
-    parent_id = None
-    if args.parent:
-        parent = json.loads(Path(args.parent).read_text(encoding="utf-8"))
-        body = {k: v for k, v in parent.items() if k != "metrics_id"}
-        if parent.get("version") != RUN_METRICS_VERSION or parent.get("metrics_id") != stable_id("met", body):
-            parser.error(f"--parent {args.parent} is not an unmodified {RUN_METRICS_VERSION} file")
-        parent_id = parent["metrics_id"]
+    parent_id = _verified_run_metrics(parser, args.parent, "--parent")["metrics_id"] if args.parent else None
     cfg = load_config(args.config)
     task = cfg.task
     lines = Path(args.trace).read_text(encoding="utf-8").splitlines()
@@ -318,7 +380,9 @@ def _run_evaluate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     body = {
         "version": RUN_METRICS_VERSION, "run_id": stable_id("run", runs), "parent_id": parent_id,
         "runs": runs, "mixed_runs": len(runs) > 1, "seed": cfg.audit.seed,
-        "series": {"cohort": args.cohort if manifest else "unsplit", "cohort_ids_sha256": _content_sha256(cohort_ids), "labels_sha256": label_digest(labels),
+        "series": {"cohort": args.cohort if manifest else "unsplit", "class_ids": list(task.class_ids),
+                   "iou_threshold": args.iou, "coco_settings": COCO_SETTINGS,
+                   "cohort_ids_sha256": _content_sha256(cohort_ids), "labels_sha256": label_digest(labels),
                    # only a verified split binds image content (frozen-lock-v2 == manifest == records);
                    # an old lock or a split-v1 manifest gives null, never a derived or upgraded hash
                    "images_sha256": _content_sha256([[i, manifest["images"][i]["sha256"]] for i in cohort_ids])
