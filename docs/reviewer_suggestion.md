@@ -1,45 +1,31 @@
 # Reviewer suggestions — open work only
 
-Updated 2026-11-10. Resolved findings and superseded architecture proposals have been removed. Requirements and research mapping remain in [specification.md](specification.md); implementation status belongs in [project_board.md](project_board.md). This file records actionable gaps without repeating those documents.
+Updated 2026-11-10; reviewed through `4896bfd`. Completed S4, shared accuracy/cost cohort, evidence-status guard, official COCO evaluation, routed scoring and immutable metrics output have been removed from the action list. Requirements/research remain in [specification.md](specification.md); status belongs in [project_board.md](project_board.md).
 
-## S4 review: one output-boundary fix remains
+## P2 — old split files crash the new metrics writer
 
-Reviewed the uncommitted implementation above `732dad6`. **R5-6 is resolved:** fitting validates the originating config hash through `shadow_run_config`, including routing-on and VLM-on CLI overrides; incompatible mixed configs are refused. Matching the entire config is conservative but acceptable for this milestone. **R5-5 is resolved at fitting and evaluation inputs**, including identical/conflicting duplicates and the sample-minimum bypass. Those completed instructions have been removed.
+**Location:** `src/routing/cli.py`, `_run_evaluate`, construction of `series.images_sha256`.
 
-### P2 — shadow still writes duplicate images (remaining R5-5)
+**Reproduced:** use a valid pre-content-hash frozen lock together with a genuine `split-v1` manifest, whose image entries contain no SHA-256/dimensions. Evaluation passes the legacy verification branch, then raises **`KeyError: 'sha256'`** when constructing the run-metrics file. It should report unverified image content. The existing legacy regression downgrades only the lock and leaves a v2 manifest with hashes, so it misses this case.
 
-**Location:** `src/routing/cli.py`, `_write_shadow_outputs`; upstream `RoutingPipeline.run` accepts repeated manifest entries.
+**Fix:** derive the series image digest only when the required image content exists and its verification status is explicit; otherwise write `null` and retain the unverified status. Never fabricate hashes or upgrade old files. Add a regression with both a real v1 manifest and old lock, plus the existing v2/old-lock combination. Both must produce a descriptive unverified report without modifying inputs; comparison must reject them as content-verified series.
 
-**Reproduction / implication:** passing `[record, record]` to `_write_shadow_outputs` succeeds and produces two annotation-image entries, two trace rows and `report.images = 2`. Repeating an input image can therefore generate a successful shadow output that the new evaluator refuses. Training/export consumers can still receive duplicates. The new fitting/evaluation checks prevent silent consumption there, but do not satisfy S4's requirement to validate before writing run outputs.
+## Before implementing run comparison
 
-**Suggested fix:** reject repeated manifest image IDs before processing where practical, and validate the collected record IDs by image at the output boundary **before any annotations, trace or report is written**. Apply a clear rule to conflicting files sharing an explicit ID. Avoid calling metric computation merely to validate uniqueness; a small shared ID validator is sufficient. Separate runs may contain the same images.
-
-**Acceptance tests:** duplicate manifest entry and conflicting files with one ID fail clearly; no partial output files are created or existing outputs overwritten; a normal run remains unchanged. Preserve the existing fitting/evaluation duplicate tests and config-override tests. Once this passes, S4 can close; R5-7 remains a separate milestone.
-
-## Metrics: standard mAP and comparable iterations
-
-**Recommendation:** use **mAP50–95 as the primary detection metric** and **mAP50 as a companion**. Use the official COCO bbox evaluator with pinned version/settings for standard results: IoU 0.50–0.95 in steps of 0.05, 101 recall points, all-area summary and the standard maximum of 100 detections per image. Preserve standard crowd/ignore handling. [Official COCO evaluator](https://github.com/cocodataset/cocoapi/blob/master/PythonAPI/pycocotools/cocoeval.py).
-
-**Current implementation gap:** `metrics.average_precision` explicitly differs from COCO on the detection cap and crowd matching. A previous fixture parity check is insufficient to claim full standard parity. Prefer a small evaluation-only `pycocotools` dependency; keep it outside model-serving environments. Retain existing diagnostic metrics where useful. If keeping the custom evaluator, label its results as custom and test parity for crowd/ignore boxes, more than 100 detections, ties, empty images and classes without ground truth before using standard metric names.
-
-**Measure the intended output:** `metrics.image_results` currently computes AP from `primary_candidates` only. Routing/VLM improvements may therefore leave both AP values unchanged. Report primary AP separately from a clearly defined scored routed-detection output. Preserve detector-authored scores and document a fixed scoring rule for fusion and multiple detectors; do not invent scores from VLM verdicts or assign every accepted box confidence 1. Score-free accepted annotations should retain precision/recall, false positives and missed-instance counts until a justified ranking exists. mAP alone does not assess relevance-probability calibration or annotation completeness.
-
-### Comparing runs and deciding when to stop
-
-1. **Iterate on development data.** Fit on calibration data; compare successive changes on the same development images and labels. Reserve frozen evaluation for predeclared milestone/promotion checks. Repeated tuning against frozen scores turns that set into development data.
-2. **Record one immutable result per run and arm.** Store run/parent IDs, image and label hashes, split identity, model/artifact/config IDs, prediction source, evaluator version/settings, seed, image/error counts and metrics. Changing dataset, annotation policy or evaluator starts a new comparison series; re-evaluate prior predictions when possible.
-3. **Compare against both the previous run and the best eligible run.** Show mAP50–95, mAP50 and absolute percentage-point deltas on a consistent scale. Preserve primary-only and always-expensive baselines. Keep per-class/size recall, FP/image, review rate and latency/calls as guardrails so an aggregate improvement cannot hide a costly or important-class regression.
-4. **Treat a plateau as an operational stopping rule, not proof of convergence.** Predeclare a minimum meaningful AP gain, patience window and regression tolerances on development data. Use paired source-group bootstrap intervals when the sample supports them. If improvements are within uncertainty for the patience window, stop tuning and assess the selected candidate on frozen data. Choose numerical thresholds before inspecting frozen results.
-
-**Implementation order:** finish the S4 output guard → standard evaluator and explicit prediction-source selection → versioned run-metrics JSON plus a small comparison command/table. A dashboard is optional; no experiment-tracking server is needed initially.
-
-## Remaining correctness and release gates
-
-| Priority / item | Action |
+| Gap / implication | Suggested action and acceptance evidence |
 |---|---|
-| **R5-7: accuracy and cost cohorts differ** | In `_run_evaluate`, select one evaluation cohort for both metrics and `route_report`. Adding a development record must not affect frozen costs. Keep missing labelled results visible as operational failures. |
-| **Training can miss renamed frozen copies** | Carry image hashes in versioned annotation exports and compare them with frozen hashes in `load_annotations`. Reject the same bytes under a different ID/group. Require verifiable split provenance for training; do not silently trust untagged legacy exports. |
-| **Evaluation provenance** | Reject task-incompatible or incompatible mixed-run traces. Separate descriptive metrics from promotion eligibility; human provenance alone must not override an unverified split/content status. |
-| **Real-data evidence** | Human-reviewed labels, image-transfer permission, difficulty validation, VLM human-label agreement, numeric promotion gates and trainer integration remain dependencies. Refer to the existing board cards and specification research references instead of duplicating their work plans here. |
+| **Stored bootstrap outcomes describe the custom evaluator, not official COCO.** `per_image_outcomes` uses `match_image`; `map_from_outcomes` explicitly reconstructs custom AP. Crowd matching and detection caps differ from the official headline metrics. | Do not attach confidence intervals from these outcomes to COCO mAP50–95/mAP50. Persist sufficient official COCO match outcomes/settings, or retain inputs and rerun the official evaluator for resampled groups. Test reconstruction against official AP with crowd boxes and more than 100 detections. Custom intervals may remain separately labeled. |
+| **Comparison compatibility is not yet enforced.** Parent validation checks integrity, not whether datasets/evaluators match. `series.images_sha256` is null without a split; a series key alone does not prove comparability. | In the comparison command require matching verified image/label/cohort identities, task, evaluator settings/version and prediction source/scoring rule. Compare matching working-IoU thresholds for diagnostic metrics. Reject incompatible mixed-run arms or explicitly separate them. Parent linkage alone must never authorize comparison. |
+| **Development iteration needs explicit cohort support.** Supplying a split currently selects frozen images; omitting it loses verified content/group provenance. | Add explicit development/frozen cohort selection with content checks and group IDs. Fit on calibration, iterate on development and reserve frozen evaluation for predeclared promotion checks. Verify that development selection excludes frozen images and preserves group-bootstrap metadata. |
+| **Run metadata can be misleading.** Evaluation takes `seed` from the supplied config without checking that config against the trace; task compatibility is also not enforced. Mixed runs are marked but can still receive an evidence label. | Validate task and originating config with supported shadow overrides, or derive run metadata from an authoritative recorded config. Reject incompatible traces for promotion/comparison; descriptive mixed-run reports must state they are ineligible. Test a changed evaluation seed/config and task with overlapping class names. |
 
-**Verification context:** S4 full CPU/mock suite: **499 passed, 7 live tests deselected, one Starlette warning**, 16.59 seconds (`python -B -m pytest -q -p no:cacheprovider` in the Pixi environment, local socket access for FastAPI tests). The duplicate-output reproduction above was run separately with a synthetic fixture. Only this review file was edited; no implementation changes or commits were made.
+Use official **mAP50–95 as primary** and **mAP50 as companion**, separately for primary and the selected routed variant. Keep the new `routed-score-v1` rule explicit: maximum source confidence is a defined ranking rule, not calibrated comparability between different detector models. Report unscored exclusions and accepted-annotation precision/recall alongside AP.
+
+For each compatible development iteration, show deltas against the previous and best eligible run, with per-class/size recall, FP/image, review workload and cost guardrails. Predeclare a meaningful improvement threshold and patience window; a plateau within paired source-group uncertainty is a stopping rule, not proof of convergence. Do not average per-image AP to estimate dataset AP. No dashboard or tracking server is required initially.
+
+## Other open boundaries
+
+- **Training copies of frozen images:** annotation exports still need content hashes and training-side comparison against frozen hashes. Reject the same bytes under another ID/group and require verifiable split provenance; tags alone do not cover copied/renamed images.
+- **Real-data evidence:** labels, transfer permission, difficulty validation, VLM agreement, promotion targets and trainer integration remain dependencies. Use existing board cards rather than duplicating their plans here.
+
+**Verification:** full CPU/mock suite **548 passed, 7 live tests deselected, one Starlette warning**, 19.20 seconds (`python -B -m pytest -q -p no:cacheprovider` in Pixi, with local socket access for FastAPI). The genuine-v1 compatibility failure was reproduced separately using synthetic fixtures. Only this document was edited; no source changes, live calls or commits.
